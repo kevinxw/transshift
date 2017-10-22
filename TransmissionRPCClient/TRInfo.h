@@ -53,6 +53,7 @@
 @property(nonatomic,readonly) NSString*     pieceSizeString;
 
 @property(nonatomic,readonly) NSString*     comment;
+@property(nonatomic,readonly) NSString*     downloadDir;
 
 @property(nonatomic,readonly) NSString*     errorString;
 @property(nonatomic,readonly) int           errorNumber;
@@ -69,12 +70,24 @@
 @property(nonatomic,readonly) NSString*     etaTimeString;
 
 @property(nonatomic,readonly) NSString*     haveValidString;
+@property(nonatomic,readonly) long long     haveValid;
 @property(nonatomic,readonly) NSString*     haveUncheckedString;
 
 @property(nonatomic,readonly) float         recheckProgress;
 @property(nonatomic,readonly) NSString*     recheckProgressString;
 
-@property(nonatomic,readonly) int           bandwidthPriority;
+@property(nonatomic) int                    bandwidthPriority;
 @property(nonatomic,readonly) NSString*     bandwidthPriorityString;
+
+@property(nonatomic) BOOL                   honorsSessionLimits;
+@property(nonatomic) BOOL                   uploadLimitEnabled;
+@property(nonatomic) int                    uploadLimit;
+@property(nonatomic) BOOL                   downloadLimitEnabled;
+@property(nonatomic) int                    downloadLimit;
+@property(nonatomic) int                    seedIdleMode;
+@property(nonatomic) int                    seedIdleLimit;
+@property(nonatomic) int                    seedRatioMode;
+@property(nonatomic) float                  seedRatioLimit;
+@property(nonatomic) int                    queuePosition;
 
 @end

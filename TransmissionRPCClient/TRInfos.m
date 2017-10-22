@@ -7,6 +7,7 @@
 //
 
 #import "TRInfos.h"
+#import "GlobalConsts.h"
 
 @interface TRInfos()
 
@@ -18,6 +19,8 @@
 
 {
     NSMutableDictionary *_chache;
+    long long           _totalUploadRate;
+    long long           _totalDownloadRate;
 }
 
 + (TRInfos *)infosFromArrayOfJSON:(NSArray *)jsonArray
@@ -169,21 +172,17 @@
     for( TRInfo* info in _items )
         c += info.uploadRate;
     
-    NSString *str;
-    if( c == 0 )
-    {
-        str = @"0 KB/s";
-    }
-    else
-    {
-        NSByteCountFormatter *byteFormatter = [[NSByteCountFormatter alloc] init];
-        byteFormatter.allowsNonnumericFormatting = NO;
-        str = [NSString stringWithFormat:@"%@/s", [byteFormatter stringFromByteCount:c]];
-    }
-    
+    NSString *str = formatByteRate(c);
     _chache[CHACHE_KEY_TOTALUPSTR] = str;
     
+    _totalUploadRate = c;
+    
     return str;
+}
+
+- (long long)totalUploadRate
+{
+    return self.totalUploadRateString ? _totalUploadRate : 0;
 }
 
 #define CHACHE_KEY_TOTALDOWNSTR   @"totalDownRateStr"
@@ -196,21 +195,17 @@
     for( TRInfo* info in _items )
         c += info.downloadRate;
     
-    NSString *str;
-    if( c == 0 )
-    {
-        str = @"0 KB/s";
-    }
-    else
-    {
-        NSByteCountFormatter *byteFormatter = [[NSByteCountFormatter alloc] init];
-        byteFormatter.allowsNonnumericFormatting = NO;
-        str = [NSString stringWithFormat:@"%@/s", [byteFormatter stringFromByteCount:c]];
-    }
-    
+    NSString *str = formatByteRate(c);
     _chache[CHACHE_KEY_TOTALDOWNSTR] = str;
     
+    _totalDownloadRate = c;
+    
     return str;
+}
+
+- (long long)totalDownloadRate
+{
+    return self.totalDownloadRateString ? _totalDownloadRate : 0;
 }
 
 #define CHACHE_KEY_TOTALDOWNSIZESTR   @"totalDownSize"
@@ -222,11 +217,8 @@
     long long c = 0;
     for( TRInfo* info in _items )
         c += info.downloadedSize;
-    
-    NSByteCountFormatter *byteFormatter = [[NSByteCountFormatter alloc] init];
-    byteFormatter.allowsNonnumericFormatting = NO;
-    
-    NSString *str = [NSString stringWithFormat:@"%@/s", [byteFormatter stringFromByteCount:c]];
+ 
+    NSString *str = formatByteCount(c);
     
     _chache[CHACHE_KEY_TOTALDOWNSIZESTR] = str;
     
@@ -242,11 +234,8 @@
     long long c = 0;
     for( TRInfo* info in _items )
         c += info.uploadedEver;
-    
-    NSByteCountFormatter *byteFormatter = [[NSByteCountFormatter alloc] init];
-    byteFormatter.allowsNonnumericFormatting = NO;
-    
-    NSString *str = [NSString stringWithFormat:@"%@/s", [byteFormatter stringFromByteCount:c]];
+ 
+    NSString *str = formatByteCount(c);
     
     _chache[CHACHE_KEY_TOTALUPSIZESTR] = str;
     

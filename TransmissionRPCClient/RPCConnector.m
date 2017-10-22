@@ -9,8 +9,10 @@
 
 #define HTTP_RESPONSE_OK                    200
 #define HTTP_RESPONSE_UNAUTHORIZED          401
+#define HTTP_RESPONSE_NEED_X_TRANS_ID       409
 #define HTTP_REQUEST_METHOD                 @"POST"
 #define HTTP_AUTH_HEADER                    @"Authorization"
+#define HTTP_XTRANSID_HEADER                @"X-Transmission-Session-Id"
 
 @implementation RPCConnector
 
@@ -47,7 +49,12 @@
                         TR_ARG_FIELDS_UPLOADRATIO,
                         TR_ARG_FIELDS_RECHECKPROGRESS,
                         TR_ARG_FIELDS_DOWNLOADEDEVER,
-                        TR_ARG_FIELDS_ETA
+                        TR_ARG_FIELDS_ETA,
+                        TR_ARG_FIELDS_SEEDRATIOMODE,
+                        TR_ARG_FIELDS_SEEDIDLEMODE,
+                        TR_ARG_FIELDS_UPLOADLIMITED,
+                        TR_ARG_FIELDS_DOWNLOADLIMITED,
+                        TR_ARG_FIELDS_HAVEVALID
                     ]
         }
     };
@@ -103,7 +110,18 @@
                                                   TR_ARG_FIELDS_RECHECKPROGRESS,
                                                   TR_ARG_FIELDS_DOWNLOADEDEVER,
                                                   TR_ARG_FIELDS_ETA,
-                                                  TR_ARG_BANDWIDTHPRIORITY
+                                                  TR_ARG_FIELDS_BANDWIDTHPRIORITY,
+                                                  TR_ARG_FIELDS_QUEUEPOSITION,
+                                                  TR_ARG_FIELDS_HONORSSESSIONLIMITS,
+                                                  TR_ARG_FIELDS_SEEDIDLELIMIT,
+                                                  TR_ARG_FIELDS_SEEDIDLEMODE,
+                                                  TR_ARG_FIELDS_SEEDRATIOLIMIT,
+                                                  TR_ARG_FIELDS_SEEDRATIOMODE,
+                                                  TR_ARG_FIELDS_UPLOADLIMIT,
+                                                  TR_ARG_FIELDS_UPLOADLIMITED,
+                                                  TR_ARG_FIELDS_DOWNLOADLIMIT,
+                                                  TR_ARG_FIELDS_DOWNLOADLIMITED,
+                                                  TR_ARG_FIELDS_DOWNLOADDIR
                                                   ],
                                           TR_ARG_IDS : @[@(torrentId)]
                                           }
@@ -123,12 +141,34 @@
      }];
 }
 
+- (void)getMagnetURLforTorrentWithId:(int)torrentId
+{
+    NSDictionary *requestVals = @{
+                                  TR_METHOD : TR_METHODNAME_TORRENTGET,
+                                  TR_METHOD_ARGS : @{ TR_ARG_FIELDS : @[ TR_ARG_FIELDS_MAGNETLINK ],  TR_ARG_IDS : @[@(torrentId)] }
+                                  };
+    
+    [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTGET andHandler:^(NSDictionary *json)
+     {
+         // save torrents and call delegate
+         NSArray *torrentsJsonDesc = json[TR_RETURNED_ARGS][TR_RETURNED_ARG_TORRENTS];
+         
+         NSString *magnetUrlString = [torrentsJsonDesc firstObject][TR_ARG_FIELDS_MAGNETLINK];
+         
+         if( _delegate && [_delegate respondsToSelector:@selector(gotMagnetURL:forTorrentWithId:)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotMagnetURL:magnetUrlString forTorrentWithId:torrentId];
+             });
+     }];
+}
+
+
 - (void)getAllPeersForTorrentWithId:(int)torrentId
 {
     NSDictionary *requestVals = @{
                                   TR_METHOD : TR_METHODNAME_TORRENTGET,
                                   TR_METHOD_ARGS : @{
-                                          TR_ARG_FIELDS : @[ TR_ARG_FIELDS_PEERS ],
+                                          TR_ARG_FIELDS : @[ TR_ARG_FIELDS_PEERS, TR_ARG_FIELDS_PEERSFROM ],
                                           TR_ARG_IDS : @[@(torrentId)]
                                           }
                                   };
@@ -143,9 +183,11 @@
          for( NSDictionary* peerJsonDict in [torrentsJsonDesc firstObject][TR_ARG_FIELDS_PEERS] )
              [peerInfos addObject:[TRPeerInfo peerInfoWithJSONData:peerJsonDict]];
          
-         if( _delegate && [_delegate respondsToSelector:@selector(gotAllPeers:forTorrentWithId:)])
+         TRPeerStat *peerStat = [TRPeerStat peerStatWithJSONData:[torrentsJsonDesc firstObject][TR_ARG_FIELDS_PEERSFROM]];
+         
+         if( _delegate && [_delegate respondsToSelector:@selector(gotAllPeers:withPeerStat:forTorrentWithId:)])
              dispatch_async(dispatch_get_main_queue(), ^{
-                 [_delegate gotAllPeers:peerInfos forTorrentWithId:torrentId];
+                 [_delegate gotAllPeers:peerInfos withPeerStat:peerStat forTorrentWithId:torrentId];
              });
      }];
 }
@@ -165,29 +207,160 @@
          // save torrents and call delegate
          NSArray *torrentsJsonDesc = json[TR_RETURNED_ARGS][TR_RETURNED_ARG_TORRENTS];
          
-         NSMutableArray *fileInfos = [NSMutableArray array];
-         
          NSArray* files = [torrentsJsonDesc firstObject][TR_ARG_FIELDS_FILES];
          NSArray* fileStats = [torrentsJsonDesc firstObject][TR_ARG_FIELDS_FILESTATS];
          
+         // ** Benchmarking **
+         //CFTimeInterval tmStart = CACurrentMediaTime();
+         // --------------------------------------------
+         FSDirectory *fsDir = [FSDirectory directory];
+         
          for( int i = 0; i < files.count; i++ )
-         {
-             NSMutableDictionary* file = [NSMutableDictionary dictionaryWithDictionary: files[i]];
-             NSDictionary* fileStat = fileStats[i];
-             
-             if( fileStat[TR_ARG_FILEINFO_PRIORITY] )
-                 file[TR_ARG_FILEINFO_PRIORITY] = fileStat[TR_ARG_FILEINFO_PRIORITY];
-             if( fileStat[TR_ARG_FILEINFO_WANTED] )
-                 file[TR_ARG_FILEINFO_WANTED] = fileStat[TR_ARG_FILEINFO_WANTED];
-             
-             [fileInfos addObject:[TRFileInfo fileInfoFromJSON:file]];
-         }
+             [fsDir addItemWithJSONFileInfo:files[i] JSONFileStatInfo:fileStats[i] rpcIndex:i];
+         
+         // --------------------------------------------
+         //CFTimeInterval tmEnd = CACurrentMediaTime();
+         //NSLog( @"%s, run time: %g s", __PRETTY_FUNCTION__,  tmEnd - tmStart );
+         
+         
+         [fsDir sort];
          
          if( _delegate && [_delegate respondsToSelector:@selector(gotAllFiles:forTorrentWithId:)])
              dispatch_async(dispatch_get_main_queue(), ^{
-                 [_delegate gotAllFiles:fileInfos forTorrentWithId:torrentId];
+                 [_delegate gotAllFiles:fsDir forTorrentWithId:torrentId];
              });
      }];    
+}
+
+- (void)getAllFileStatsForTorrentWithId:(int)torrentId
+{
+    NSDictionary *requestVals = @{
+                                  TR_METHOD : TR_METHODNAME_TORRENTGET,
+                                  TR_METHOD_ARGS : @{ TR_ARG_FIELDS : @[ TR_ARG_FIELDS_FILESTATS], TR_ARG_IDS : @[@(torrentId)] }
+                                 };
+    
+    [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTGET andHandler:^(NSDictionary *json)
+     {
+         // save torrents and call delegate
+         NSArray *torrents = json[TR_RETURNED_ARGS][TR_RETURNED_ARG_TORRENTS];
+         NSArray* fileStats = [torrents firstObject][TR_ARG_FIELDS_FILESTATS];
+         
+         NSMutableArray *res = [NSMutableArray array];
+         
+         for( NSDictionary *fileStatJSON in fileStats )
+         {
+             TRFileStat *fileStat = [TRFileStat fileStatFromJSON:fileStatJSON];
+             [res addObject:fileStat];
+         }
+         
+         if( _delegate && [_delegate respondsToSelector:@selector(gotAllFileStats:forTorrentWithId:)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotAllFileStats:res forTorrentWithId:torrentId];
+             });
+     }];
+}
+
+- (void)getAllTrackersForTorrentWithId:(int)torrentId
+{
+    NSDictionary *requestVals = @{
+                                  TR_METHOD : TR_METHODNAME_TORRENTGET,
+                                  TR_METHOD_ARGS : @{
+                                          TR_ARG_FIELDS : @[ TR_ARG_FIELDS_TRACKERSTATS ],
+                                          TR_ARG_IDS : @[@(torrentId)]
+                                          }
+                                  };
+    
+    [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTGET andHandler:^(NSDictionary *json)
+     {
+         // save torrents and call delegate
+         NSArray *torrentsJsonDesc = json[TR_RETURNED_ARGS][TR_RETURNED_ARG_TORRENTS];
+         
+         NSArray* trackerStats = [torrentsJsonDesc firstObject][TR_ARG_FIELDS_TRACKERSTATS];
+         
+         NSMutableArray *res = [NSMutableArray array];
+         
+         for( NSDictionary *dict in trackerStats )
+             [res addObject:[TrackerStat initFromJSON:dict]];
+         
+         if( _delegate && [_delegate respondsToSelector:@selector(gotAllTrackers:forTorrentWithId:)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotAllTrackers:res forTorrentWithId:torrentId];
+             });
+     }];
+}
+
+- (void)getPiecesBitMapForTorrent:(int)torrentId
+{
+    NSDictionary *requestVals = @{
+                                  TR_METHOD : TR_METHODNAME_TORRENTGET,
+                                  TR_METHOD_ARGS : @{
+                                          TR_ARG_FIELDS : @[ TR_ARG_FIELDS_PIECES ],
+                                          TR_ARG_IDS : @[@(torrentId)]
+                                          }
+                                  };
+    
+    [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTGET andHandler:^(NSDictionary *json)
+     {
+         // save torrents and call delegate
+         NSArray *torrentsJsonDesc = json[TR_RETURNED_ARGS][TR_RETURNED_ARG_TORRENTS];
+         
+         NSString* base64data = [torrentsJsonDesc firstObject][TR_ARG_FIELDS_PIECES];
+ 
+         NSData *data = [[NSData alloc] initWithBase64EncodedString:base64data options:NSDataBase64DecodingIgnoreUnknownCharacters];
+         
+         if( _delegate && [_delegate respondsToSelector:@selector(gotPiecesBitmap:forTorrentWithId:)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotPiecesBitmap:data forTorrentWithId:torrentId];
+             });
+     }];
+}
+
+
+- (void)removeTracker:(int)trackerId forTorrent:(int)torrentId
+{
+    NSDictionary *requestVals = @{
+                                  TR_METHOD : TR_METHODNAME_TORRENTSET,
+                                  TR_METHOD_ARGS : @{
+                                          TR_ARG_FIELDS_TRACKERREMOVE : @[ @(trackerId) ],
+                                          TR_ARG_IDS : @[@(torrentId)]
+                                          }
+                                  };
+    
+    [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTSET andHandler:^(NSDictionary *json)
+     {
+         if( _delegate && [_delegate respondsToSelector:@selector(gotTrackerRemoved:forTorrentWithId:)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotTrackerRemoved:trackerId forTorrentWithId:torrentId];
+             });
+     }];
+}
+
+- (void)setSettings:(TRInfo *)info forTorrentWithId:(int)torrentId
+{
+    NSDictionary *requestVals = @{
+                                  TR_METHOD : TR_METHODNAME_TORRENTSET,
+                                  TR_METHOD_ARGS : @{
+                                          TR_ARG_FIELDS_QUEUEPOSITION : @(info.queuePosition),
+                                          TR_ARG_FIELDS_BANDWIDTHPRIORITY : @(info.bandwidthPriority),
+                                          TR_ARG_FIELDS_UPLOADLIMITED : @(info.uploadLimitEnabled),
+                                          TR_ARG_FIELDS_UPLOADLIMIT : @(info.uploadLimit),
+                                          TR_ARG_FIELDS_DOWNLOADLIMITED : @(info.downloadLimitEnabled),
+                                          TR_ARG_FIELDS_DOWNLOADLIMIT : @(info.downloadLimit),
+                                          TR_ARG_FIELDS_SEEDIDLEMODE : @(info.seedIdleMode),
+                                          TR_ARG_FIELDS_SEEDIDLELIMIT : @(info.seedIdleLimit),
+                                          TR_ARG_FIELDS_SEEDRATIOMODE : @(info.seedRatioMode),
+                                          TR_ARG_FIELDS_SEEDRATIOLIMIT : @(info.seedRatioLimit),
+                                          TR_ARG_IDS : @[@(torrentId)]
+                                          }
+                                  };
+    
+    [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTSET andHandler:^(NSDictionary *json)
+     {
+         if( _delegate && [_delegate respondsToSelector:@selector(gotSetSettingsForTorrentWithId:)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotSetSettingsForTorrentWithId:torrentId];
+             });
+     }];
 }
 
 - (void)stopTorrent:(int)torrentId
@@ -206,6 +379,19 @@
      }];
 }
 
+- (void)stopAllTorrents
+{
+    NSDictionary *requestVals = @{ TR_METHOD : TR_METHODNAME_TORRENTSTOP };
+    
+    [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTSTOP andHandler:^(NSDictionary *json)
+     {
+         if( _delegate && [_delegate respondsToSelector:@selector(gotAllTorrentsStopped)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotAllTorrentsStopped];
+             });
+     }];    
+}
+
 - (void)resumeTorrent:(int)torrentId
 {
     NSDictionary *requestVals = @{
@@ -218,6 +404,19 @@
          if( _delegate && [_delegate respondsToSelector:@selector(gotTorrentResumedWithId:)])
              dispatch_async(dispatch_get_main_queue(), ^{
                  [_delegate gotTorrentResumedWithId:torrentId];
+             });
+     }];
+}
+
+- (void)resumeAllTorrents
+{
+    NSDictionary *requestVals = @{ TR_METHOD : TR_METHODNAME_TORRENTRESUME };
+      
+    [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTRESUME andHandler:^(NSDictionary *json)
+     {
+         if( _delegate && [_delegate respondsToSelector:@selector(gotAlltorrentsResumed)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotAlltorrentsResumed];
              });
      }];
 }
@@ -289,6 +488,51 @@
 
 }
 
+
+- (void)renameTorrent:(int)torrentId withName:(NSString *)name andPath:(NSString *)path
+{
+    NSDictionary *requestVals = @{
+                                  TR_METHOD : TR_METHODNAME_TORRENTSETNAME,
+                                  TR_METHOD_ARGS : @{ TR_ARG_IDS : @[@(torrentId)], TR_ARG_FIELDS_NAME : name, TR_ARG_FIELDS_PATH: path }
+                                  };
+    
+    [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTSETNAME andHandler:^(NSDictionary *json)
+     {
+         if( _delegate && [_delegate respondsToSelector:@selector(gotTorrentRenamed:withName:andPath:)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotTorrentRenamed:torrentId withName:name andPath:path];
+             });
+     }];
+}
+
+
+
+- (void)addTorrentWithData:(NSData *)data
+                  priority:(int)priority
+          startImmidiately:(BOOL)startImmidiately
+           indexesUnwanted:(NSArray*)idxUnwanted
+{
+    NSString *base64content = [data base64EncodedStringWithOptions:NSDataBase64Encoding64CharacterLineLength];
+    
+    NSDictionary *requestVals = @{
+                                  TR_METHOD : TR_METHODNAME_TORRENTADD,
+                                  TR_METHOD_ARGS : @{ TR_ARG_METAINFO : base64content,
+                                                      TR_ARG_BANDWIDTHPRIORITY : @(priority),
+                                                      TR_ARG_PAUSEONADD: startImmidiately ? @(NO):@(YES),
+                                                      TR_ARG_FIELDS_FILES_UNWANTED : idxUnwanted
+                                                    }
+                                  };
+    
+    [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTADD andHandler:^(NSDictionary *json)
+     {
+         if( _delegate && [_delegate respondsToSelector:@selector(gotTorrentAdded)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotTorrentAdded];
+             });
+     }];
+    
+}
+
 - (void)addTorrentWithMagnet:(NSString *)magnetURLString priority:(int)priority startImmidiately:(BOOL)startImmidiately
 {    
     NSDictionary *requestVals = @{
@@ -318,7 +562,6 @@
     
 }
 
-
 - (void)stopDownloadingFilesWithIndexes:(NSArray *)indexes forTorrentWithId:(int)torrentId
 {
     NSDictionary *requestVals = @{TR_METHOD : TR_METHODNAME_TORRENTSET,
@@ -326,10 +569,10 @@
     
     [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTSET andHandler:^(NSDictionary *json)
      {
-//         if( _delegate && [_delegate respondsToSelector:@selector(gotTorrentDeletedWithId:)])
-//             dispatch_async(dispatch_get_main_queue(), ^{
-//                 [_delegate gotTorrentDeletedWithId:torrentId];
-//             });
+         if( _delegate && [_delegate respondsToSelector:@selector(gotFilesStoppedToDownload:forTorrentWithId:)])
+             dispatch_async(dispatch_get_main_queue(), ^{
+                 [_delegate gotFilesStoppedToDownload:indexes forTorrentWithId:torrentId];
+             });
      }];
 }
 
@@ -340,10 +583,10 @@
     
     [self makeRequest:requestVals withName:TR_METHODNAME_TORRENTSET andHandler:^(NSDictionary *json)
      {
-         //         if( _delegate && [_delegate respondsToSelector:@selector(gotTorrentDeletedWithId:)])
-         //             dispatch_async(dispatch_get_main_queue(), ^{
-         //                 [_delegate gotTorrentDeletedWithId:torrentId];
-         //             });
+                  if( _delegate && [_delegate respondsToSelector:@selector(gotFilesResumedToDownload:forTorrentWithId:)])
+                      dispatch_async(dispatch_get_main_queue(), ^{
+                          [_delegate gotFilesResumedToDownload:indexes forTorrentWithId:torrentId];
+                      });
      }];
 }
 
@@ -433,6 +676,21 @@
     }];
 }
 
+/// toggle alternative limits mode
+- (void)toggleAltLimitMode:(BOOL)altLimitsEnabled
+{
+    NSDictionary *requestVals = @{ TR_METHOD : TR_METHODNAME_SESSIONSET,
+                                   TR_METHOD_ARGS : @{ TR_ARG_SESSION_ALTLIMITRATEENABLED : @(altLimitsEnabled) } };
+    
+    [self makeRequest:requestVals withName:TR_METHODNAME_SESSIONSET andHandler:^(NSDictionary *json)
+    {
+        if( _delegate && [_delegate respondsToSelector:@selector(gotToggledAltLimitMode:)] )
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [_delegate gotToggledAltLimitMode:altLimitsEnabled];
+            });
+    }];
+}
+
 - (void)getFreeSpaceWithDownloadDir:(NSString *)downloadDir
 {
     NSDictionary *requestVals = @{TR_METHOD : TR_METHODNAME_FREESPACE,
@@ -478,6 +736,9 @@
     if( _authString )
         [req addValue:_authString forHTTPHeaderField: HTTP_AUTH_HEADER];
     
+    if( _config.xTransSessionId )
+        [req addValue: _config.xTransSessionId forHTTPHeaderField:HTTP_XTRANSID_HEADER];
+    
     // JSON request
     //req.HTTPBody = [httpBody dataUsingEncoding:NSUTF8StringEncoding];
     
@@ -490,7 +751,9 @@
     
     _task = [_session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error)
     {
-        [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
+        });
         
         // code goes here
         if( error )
@@ -509,7 +772,13 @@
                 {
                     _lastErrorMessage = [NSHTTPURLResponse localizedStringForStatusCode:httpResponse.statusCode];
                     if( statusCode == HTTP_RESPONSE_UNAUTHORIZED )
-                        _lastErrorMessage = @"You are unauthorized to access server";
+                        _lastErrorMessage = NSLocalizedString(@"You are unauthorized to access server", @"");
+                    else if( statusCode == HTTP_RESPONSE_NEED_X_TRANS_ID )
+                    {
+                        _config.xTransSessionId = httpResponse.allHeaderFields[HTTP_XTRANSID_HEADER];
+                        [self makeRequest:requestDict withName:requestName andHandler:dataHandler];
+                        return;
+                    }
                     
                     [self sendErrorMessage:[NSString stringWithFormat:@"%li %@", (long)statusCode, _lastErrorMessage]
                           toDelegateWithRequestMethodName:requestName];
@@ -521,7 +790,7 @@
                     NSDictionary *ansJSON = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if( !ansJSON )
                     {
-                        [self sendErrorMessage:@"Server response wrong data"
+                        [self sendErrorMessage:NSLocalizedString(@"Server response wrong data", @"")
                               toDelegateWithRequestMethodName:requestName];
                     }
                     // JSON is OK, trying to retrieve result of request it should be TR_RESULT_SUCCEED
@@ -530,12 +799,12 @@
                         NSString *result =  ansJSON[TR_RESULT];
                         if( !result )
                         {
-                            [self sendErrorMessage:@"Server failed to return data"
+                            [self sendErrorMessage:NSLocalizedString(@"Server failed to return data", @"")
                                   toDelegateWithRequestMethodName:requestName];
                         }
                         else if( ![result isEqualToString: TR_RESULT_SUCCEED] )
                         {
-                            [self sendErrorMessage:[NSString stringWithFormat:@"Server failed to return data: %@", result]
+                            [self sendErrorMessage:[NSString stringWithFormat:NSLocalizedString(@"Server failed to return data: %@", @""), result]
                                   toDelegateWithRequestMethodName:requestName];
                         }
                         else
@@ -550,7 +819,10 @@
     }];
     
     // start activity indicator
-    [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
+    });
+    
     [_task resume];
 }
 
@@ -597,7 +869,7 @@
             
             NSString *authStringToEncode64 = [NSString stringWithFormat:@"%@:%@", config.userName, config.userPassword];
             NSData *data = [authStringToEncode64 dataUsingEncoding:NSUTF8StringEncoding];
-            _authString = [NSString stringWithFormat:@"Basic %@", [data base64EncodedStringWithOptions:NSDataBase64Encoding64CharacterLineLength]];
+            _authString = [NSString stringWithFormat:@"Basic %@", [data base64EncodedStringWithOptions:0]];
         }
     }
     

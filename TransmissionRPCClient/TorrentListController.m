@@ -8,127 +8,215 @@
 
 #import "TorrentListController.h"
 #import "TorrentListCell.h"
+#import "NSObject+DataObject.h"
+#import "GlobalConsts.h"
 
-#define ICON_DOWNLOAD   @"downloadIcon"
-#define ICON_UPLOAD     @"uploadIcon"
-#define ICON_STOP       @"stopIcon"
-#define ICON_CHECK      @"checkIcon"
-#define ICON_ERROR      @"iconErrorTorrent40x40"
+#define STOP_ALL_TORRENTS_TAG   0
+#define START_ALL_TORRENTS_TAG  1
 
-@interface TorrentListController () <UIActionSheetDelegate>
+@interface TorrentListController () <UIActionSheetDelegate, UIAlertViewDelegate>
 
 @end
 
 @implementation TorrentListController
 
 {
-    UILabel *_backgroundLabel;
-    NSMutableArray *_sectionTitles;
-    NSMutableArray *_sectionTorrents;
     TorrentListCell *_editCell;
+    NSMutableArray  *_catitems;  // array of StatusCategoryItem objects
     
-    NSDictionary*   _statusIconImages;
+    UIBarButtonItem *_stopAllButton;
+    UIBarButtonItem *_startAllButton;
 }
 
 - (void)viewDidLoad
 {
     [super viewDidLoad];
-    [self prepareData];
     
-    _statusIconImages = @{ ICON_DOWNLOAD :  [[UIImage imageNamed:ICON_DOWNLOAD] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate],
-                           ICON_STOP :      [[UIImage imageNamed:ICON_STOP] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate],
-                           ICON_UPLOAD :    [[UIImage imageNamed:ICON_UPLOAD] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate],
-                           ICON_CHECK :     [[UIImage imageNamed:ICON_CHECK] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate],
-                           ICON_ERROR :     [[UIImage imageNamed:ICON_ERROR] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]};
+    _catitems = [NSMutableArray array];
+    
+    _stopAllButton = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"iconStopAll22x22"] style:UIBarButtonItemStylePlain target:self action:@selector(stopAllTorrentsButtonPressed)];
+    
+    _startAllButton = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"iconStartAll22x22"] style:UIBarButtonItemStylePlain target:self action:@selector(startAllTorrentsButtonPressed)];
+    
+    self.navigationItem.rightBarButtonItems = nil;
 }
 
 
-- (void)setTorrents:(TRInfos *)torrents
+- (void)stopAllTorrentsButtonPressed
 {
-    _torrents = torrents;
-    self.errorMessage = nil;
-    
-    [self prepareData];
-    [self.tableView reloadData];
+    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:NSLocalizedString(@"Stop all torrents", @"")
+                                                    message:NSLocalizedString(@"Do you want to stop all torrents?", @"")
+                                                   delegate:self cancelButtonTitle: NSLocalizedString(@"Cancel", @"") otherButtonTitles:NSLocalizedString(@"OK", @""), nil];
+    alert.dataObject = @(STOP_ALL_TORRENTS_TAG);
+    [alert show];
 }
 
-
-- (void)setFilterOptions:(TRStatusOptions)filterOptions
+- (void)startAllTorrentsButtonPressed
 {
-    _filterOptions = filterOptions;
-    
-    [self prepareData];
-    [self.tableView reloadData];
+    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:NSLocalizedString(@"Start all torrents", @"")
+                                                    message:NSLocalizedString(@"Do you want to start all torrents?", @"")
+                                                   delegate:self cancelButtonTitle: NSLocalizedString(@"Cancel", @"") otherButtonTitles:NSLocalizedString(@"OK", @""), nil];
+    alert.dataObject = @(START_ALL_TORRENTS_TAG);
+    [alert show];
 }
 
-- (void)prepareData
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
 {
-    // init data for rows
-    _sectionTitles = [NSMutableArray array];
-    _sectionTorrents = [NSMutableArray array];
+    int ACTION_TAG = [alertView.dataObject intValue];
+    
+    if( buttonIndex != alertView.cancelButtonIndex && _delegate )
+    {
+        if( ACTION_TAG == STOP_ALL_TORRENTS_TAG &&
+           [_delegate respondsToSelector:@selector(torrentListStopAllTorrents)] )
+            [_delegate torrentListStopAllTorrents];
+        
+        else if( ACTION_TAG == START_ALL_TORRENTS_TAG &&
+                [_delegate respondsToSelector:@selector(torrentListStartAllTorrents)] )
+            [_delegate torrentListStartAllTorrents];
+    }
+}
 
-    if( !_torrents )
+// update model to the new state from @items
+- (void)setItems:(StatusCategory *)items
+{
+    if( !items && !_catitems )
+    {
+        self.errorMessage = nil;
+        [self.tableView reloadData];
+        return;
+    }
+    
+    // get mutable copy of non empty CategoryItems (sections of the table)
+    NSMutableArray *newCats = [items mutableCopyOfNonEmptyItems];
+    
+    // section indexes
+    NSMutableIndexSet *idxSectionToReload  = [NSMutableIndexSet indexSet];
+    NSMutableIndexSet *idxSectionToAdd     = [NSMutableIndexSet indexSet];
+    NSMutableIndexSet *idxSectionToRemove  = [NSMutableIndexSet indexSet];
+    NSMutableIndexSet *idxSectionToUpdate  = [NSMutableIndexSet indexSet];
+    
+    // NSIndex paths for sections
+    NSMutableArray *idxPathsToRemove    = [NSMutableArray array];
+    NSMutableArray *idxPathsToAdd       = [NSMutableArray array];
+    NSMutableArray *idxPathsToReload    = [NSMutableArray array];
+    
+    NSUInteger maxSections = MAX(newCats.count, _catitems.count);
+    for( NSUInteger i = 0; i < maxSections; i ++ )
+    {
+        StatusCategoryItem *newCat = i < newCats.count ?  newCats[i] : nil;
+        StatusCategoryItem *curCat = i < _catitems.count ? _catitems[i] : nil;
+        
+        if( curCat == nil )
+        {
+            // INSERT SECTION
+            [idxSectionToAdd addIndex:i];
+        }
+        else if ( newCat == nil )
+        {
+            // DELETE
+            [idxSectionToRemove addIndex:i];
+        }
+        else if( [curCat.title isEqualToString:newCat.title] )
+        {
+            // UPDATE SECTION
+            [idxSectionToUpdate addIndex:i];
+            
+            NSUInteger maxRows = MAX(curCat.items.count, newCat.items.count);
+            for( NSUInteger row = 0; row < maxRows; row++)
+            {
+                TRInfo *infoNew = row < newCat.items.count ? newCat.items[row] : nil;
+                TRInfo *infoCur = row < curCat.items.count ? curCat.items[row] : nil;
+                
+                NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:i];
+                
+                if( infoNew == nil )
+                {
+                    // DELETE
+                    [idxPathsToRemove addObject:path];
+                }
+                else if ( infoCur == nil )
+                {
+                    // INSERT
+                    [idxPathsToAdd addObject:path];
+                }
+                else if( infoCur.trId == infoNew.trId )
+                {
+                    // UPDATE
+                    TorrentListCell *cell = (TorrentListCell*)[self.tableView cellForRowAtIndexPath:path];
+                    if( cell )
+                        [self updateCell:cell withTorrentInfo:infoNew];
+                }
+                else
+                {
+                    // RELOAD
+                    [idxPathsToReload addObject:path];
+                }
+            }
+        }
+        else
+        {
+            // RELOAD SECTION
+            [idxSectionToReload addIndex:i];
+        }
+    }
+    
+    
+    // now we update model
+    _items = items;
+    _catitems = newCats;
+    
+    if( idxSectionToAdd.count > 0 ||
+        idxSectionToReload.count > 0 ||
+        idxSectionToRemove.count > 0 ||
+        idxPathsToAdd.count > 0 ||
+        idxPathsToReload.count > 0 ||
+        idxPathsToRemove.count > 0 )
+    {
+        [self.tableView beginUpdates];
+        
+        if( idxSectionToAdd.count > 0 )
+            [self.tableView insertSections:idxSectionToAdd withRowAnimation:UITableViewRowAnimationAutomatic];
+        
+        if( idxSectionToRemove.count > 0 )
+            [self.tableView deleteSections:idxSectionToRemove withRowAnimation:UITableViewRowAnimationAutomatic];
+        
+        if( idxSectionToReload.count > 0 )
+            [self.tableView reloadSections:idxSectionToReload withRowAnimation:UITableViewRowAnimationAutomatic];
+        
+        if( idxPathsToAdd.count > 0 )
+            [self.tableView insertRowsAtIndexPaths:idxPathsToAdd withRowAnimation:UITableViewRowAnimationAutomatic];
+        
+        if( idxPathsToRemove.count > 0 )
+            [self.tableView deleteRowsAtIndexPaths:idxPathsToRemove withRowAnimation:UITableViewRowAnimationAutomatic];
+        
+        if( idxPathsToReload.count > 0 )
+            [self.tableView reloadRowsAtIndexPaths:idxPathsToReload withRowAnimation:UITableViewRowAnimationAutomatic];        
+        
+        [self.tableView endUpdates];
+    }
+        
+    
+    self.navigationItem.rightBarButtonItems =  ( _catitems && _catitems.count > 0 ) ?  @[ _stopAllButton, _startAllButton ] : nil;
+}
+
+#pragma mark - UIActionSheet delegate methods (allow to delete torrent with swipe-to delete gesture)
+
+- (void)actionSheet:(UIActionSheet *)actionSheet willDismissWithButtonIndex:(NSInteger)buttonIndex
+{
+    [self.tableView setEditing:NO animated:YES];
+}
+
+- (void)actionSheet:(UIActionSheet *)actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex
+{
+    [self.tableView setEditing:NO animated:NO];
+    
+    if( buttonIndex == actionSheet.cancelButtonIndex )
         return;
     
-    if( _filterOptions & TRStatusOptionsDownload )
-    {
-        NSArray *arr = _torrents.downloadingTorrents;
-        if( arr.count > 0 )
-        {
-            [_sectionTitles addObject:STATUS_ROW_DOWNLOAD];
-            [_sectionTorrents addObject:arr];
-        }
-    }
+    BOOL removeWithData = (buttonIndex != actionSheet.destructiveButtonIndex);
     
-    if( _filterOptions & TRStatusOptionsSeed )
-    {
-        NSArray *arr = _torrents.seedingTorrents;
-        if( arr.count > 0 )
-        {
-            [_sectionTitles addObject:STATUS_ROW_SEED];
-            [_sectionTorrents addObject:arr];
-        }
-    }
-    
-    if( _filterOptions & TRStatusOptionsStop )
-    {
-        NSArray *arr = _torrents.stoppedTorrents;
-        if( arr.count > 0 )
-        {
-            [_sectionTitles addObject:STATUS_ROW_STOP];
-            [_sectionTorrents addObject:arr];
-        }
-    }
-    
-    if( _filterOptions & TRStatusOptionsCheck )
-    {
-        NSArray *arr = _torrents.checkingTorrents;
-        if( arr.count > 0 )
-        {
-            [_sectionTitles addObject:STATUS_ROW_CHECK];
-            [_sectionTorrents addObject:arr];
-        }
-    }
-    
-    if( _filterOptions & TRStatusOptionsActive )
-    {
-        NSArray *arr = _torrents.activeTorrents;
-        if( arr.count > 0 )
-        {
-            [_sectionTitles addObject:STATUS_ROW_ACTIVE];
-            [_sectionTorrents addObject:arr];
-        }
-    }
-    
-    if( _filterOptions & TRStatusOptionsError )
-    {
-        NSArray *arr = _torrents.errorTorrents;
-        if( arr.count > 0 )
-        {
-            [_sectionTitles addObject:STATUS_ROW_ERROR];
-            [_sectionTorrents addObject:arr];
-        }
-    }
+    if( _delegate && [_delegate respondsToSelector:@selector(torrentListRemoveTorrentWithId:removeWithData:)])
+        [_delegate torrentListRemoveTorrentWithId:_editCell.torrentId removeWithData:removeWithData];
 }
 
 #pragma mark - UISplitViewControllerDelegate methods
@@ -137,17 +225,12 @@
 {
     _popoverButtonTitle = popoverButtonTitle;
     if( self.splitViewController && self.navigationItem.leftBarButtonItem )
-    {
        [self.navigationItem.leftBarButtonItem setTitle:popoverButtonTitle];
-    }
 }
 
 - (void)splitViewController:(UISplitViewController *)svc willHideViewController:(UIViewController *)aViewController withBarButtonItem:(UIBarButtonItem *)barButtonItem forPopoverController:(UIPopoverController *)pc
 {
-    //NSLog(@"TorrentListControllerWillHideForPopover: %@", self.popoverButtonTitle);
-    
     barButtonItem.title = self.popoverButtonTitle;
-    
     self.navigationItem.leftBarButtonItem = barButtonItem;
 }
 
@@ -157,7 +240,7 @@
         self.navigationItem.leftBarButtonItem = nil;
 }
 
-#pragma mark - Table view data source
+#pragma mark - UITableView delegate/datasource methods
 
 // torrent is selected, signal to delegate with
 // correspondend torrent id
@@ -179,11 +262,12 @@
         TorrentListCell *cell = (TorrentListCell*)[tableView cellForRowAtIndexPath:indexPath];
         
         // show action sheet
-        UIActionSheet *action = [[UIActionSheet alloc] initWithTitle:[NSString stringWithFormat:@"Remove torrent %@?", cell.name.text]
-                                                            delegate:self
-                                                   cancelButtonTitle:@"Cancel"
-                                              destructiveButtonTitle:@"Remove"
-                                                   otherButtonTitles:@"Remove with data", nil];
+        UIActionSheet *action = [[UIActionSheet alloc]
+                                 initWithTitle:[NSString stringWithFormat: NSLocalizedString(@"Remove torrent: %@?", @""), cell.name.text]
+                                 delegate:self
+                                 cancelButtonTitle: NSLocalizedString(@"Cancel", @"")
+                                 destructiveButtonTitle: NSLocalizedString(@"Remove", @"")
+                                 otherButtonTitles: NSLocalizedString(@"Remove with data", @""), nil];
         CGRect r = cell.bounds;
         r.origin.x = r.size.width - 30;
         
@@ -193,49 +277,40 @@
     }
 }
 
-- (void)actionSheet:(UIActionSheet *)actionSheet willDismissWithButtonIndex:(NSInteger)buttonIndex
-{
-    [self.tableView setEditing:NO animated:YES];
-}
-
-- (void)actionSheet:(UIActionSheet *)actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex
-{
-    [self.tableView setEditing:NO animated:NO];
-    
-    if( buttonIndex == actionSheet.cancelButtonIndex )
-        return;
- 
-    BOOL removeWithData = (buttonIndex != actionSheet.destructiveButtonIndex);
-    
-    if( _delegate && [_delegate respondsToSelector:@selector(torrentListRemoveTorrentWithId:removeWithData:)])
-        [_delegate torrentListRemoveTorrentWithId:_editCell.torrentId removeWithData:removeWithData];
-}
-
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
     // check how many sections do we have
-    if ( _sectionTitles && _sectionTitles.count > 0 )
+    //if ( _items && _items.countOfNonEmptyItems > 0 )
+    if( _catitems && _catitems.count > 0 )
     {
         self.infoMessage = nil;
-        return _sectionTitles.count;
+        self.errorMessage = nil;
+        //return _items.countOfNonEmptyItems;
+        return _catitems.count;
     }
     
-    self.infoMessage = @"There are no torrents to show.";
+    if( _items && _items.emptyTitle )
+        self.infoMessage = _items.emptyTitle;
+    else
+        self.infoMessage =  NSLocalizedString(@"There are no torrents to show.", @"TorrentList background message");
+    
     return 0;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section
 {
-    return _sectionTitles[section];
+    StatusCategoryItem *item = _catitems[section];
+    //StatusCategoryItem *item = [_items nonEmptyItemAtIndex:(int)section];
+    
+    return item.title;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
-    // Return the number of rows in the section.
-    if ( _sectionTitles )
-        return ((NSArray *)_sectionTorrents[section]).count;
+    StatusCategoryItem *item = _catitems[section];
+    //StatusCategoryItem *item = [_items nonEmptyItemAtIndex:(int)section];
     
-    return 0;
+    return item.count;
 }
 
 // returns configured cell for torrent
@@ -243,73 +318,188 @@
 {
     TorrentListCell *cell = [tableView dequeueReusableCellWithIdentifier:CELL_ID_TORRENTLIST forIndexPath:indexPath];
     
-    TRInfo *info = _sectionTorrents[indexPath.section][indexPath.row];
+    //StatusCategoryItem *item = [_items nonEmptyItemAtIndex:(int)indexPath.section];
+    StatusCategoryItem *item = _catitems[indexPath.section];
+    
+    TRInfo *info = item.items[indexPath.row];
+    
+    [self updateCell:cell withTorrentInfo:info];
+    
+    return cell;
+}
+
+- (void)updateCell:(TorrentListCell*)cell withTorrentInfo:(TRInfo*)info
+{
+    cell.torrentId = info.trId;
     
     cell.name.text = info.name;
     cell.progressPercents.text = info.percentsDoneString;
     cell.progressBar.progress = info.percentsDone;
-    cell.torrentId = info.trId;
     cell.downloadRate.text = @"";
     cell.uploadRate.text = @"";
-    //cell.size.text = [NSString stringWithFormat:@"%@ of %@", info.downloadedSizeString, info.totalSizeString ];
-    cell.progressBar.trackTintColor = [UIColor colorWithRed:0.95 green:0.95 blue:0.95 alpha:1];
+    cell.progressBar.trackTintColor = [UIColor progressBarTrackColor];
+    //cell.buttonStopResume.imageView.image = nil;
+    cell.buttonStopResume.hidden = NO;
+    cell.buttonStopResume.enabled = YES;
+    cell.buttonStopResume.dataObject = info;
     
-    UIColor *progressBarColor = [UIColor colorWithRed:0 green:0 blue:1 alpha:1];
+    [cell.buttonStopResume addTarget:self action:@selector(playPauseButtonPressed:) forControlEvents:UIControlEventTouchUpInside];
+    
+    UIColor *progressBarColor = cell.tintColor;
     NSString *detailInfo = @"";
+    
+    // reset unfinished progress
+    cell.progressBar.downloadedProgress = nil;
+    
+    UIImage *btnImg;
+    UIColor *btnTintColor;
     
     if ( info.isSeeding )
     {
-        progressBarColor = [UIColor colorWithRed:0 green:0.8 blue:0 alpha:1.0];
-        detailInfo = [NSString stringWithFormat:@"Seeding to %i of %i peers", info.peersGettingFromUs, info.peersConnected ];
-        cell.downloadRate.text = [NSString stringWithFormat:@"↑UL: %@/s", info.uploadRateString];
-        cell.size.text = [NSString stringWithFormat:@"%@, uploaded %@ (Ratio %0.2f)", info.downloadedSizeString, info.uploadedEverString, info.uploadRatio];
-        cell.statusIcon.image = _statusIconImages[ICON_UPLOAD];
+        progressBarColor = [UIColor seedColor];
+        detailInfo = [NSString stringWithFormat: NSLocalizedString(@"Seeding to %i of %i peers",@""),
+                      info.peersGettingFromUs, info.peersConnected ];
+        cell.downloadRate.text = [NSString stringWithFormat:NSLocalizedString(@"↑UL: %@", @""), info.uploadRateString];
+        cell.size.text = [NSString stringWithFormat: NSLocalizedString(@"%@, uploaded %@ (Ratio %0.2f)", @""),
+                          info.downloadedSizeString,
+                          info.uploadedEverString,
+                          info.uploadRatio];
+        
+        // fix: Show actual downloaded size
+        if( ![info.haveValidString isEqual:info.downloadedSizeString] )
+        {
+            cell.size.text = [NSString stringWithFormat: NSLocalizedString( @"%@ of %@, uploaded %@ (Ratio %0.2f)", @"" ),
+                              info.haveValidString,
+                              info.totalSizeString,
+                              info.uploadedEverString,
+                              info.uploadRatio];
+            
+            cell.progressBar.downloadedProgress = @((CGFloat)info.haveValid / (CGFloat)info.totalSize);
+        }
+        
+        cell.statusIcon.iconType = IconCloudTypeUpload;
+        info.uploadRate > 0 ? [cell.statusIcon playUploadAnimation] : [cell.statusIcon stopUploadAnimation];
+        
+        btnImg = [UIImage iconPause];
+        btnTintColor = [UIColor stopColor];
     }
     else if( info.isDownloading )
     {
-        detailInfo = [NSString stringWithFormat:@"Downloading from %i of %i peers, ETA: %@", info.peersSendingToUs, info.peersConnected, info.etaTimeString ];
-        cell.downloadRate.text = [NSString stringWithFormat:@"↓DL: %@/s", info.downloadRateString];
-        cell.uploadRate.text = [NSString stringWithFormat:@"↑UL: %@/s", info.uploadRateString];
-        cell.size.text = [NSString stringWithFormat:@"%@ of %@", info.downloadedSizeString, info.totalSizeString ];
-        cell.statusIcon.image = _statusIconImages[ICON_DOWNLOAD];
+        detailInfo = [NSString stringWithFormat: NSLocalizedString(@"Downloading from %i of %i peers, ETA: %@", @""),
+                      info.peersSendingToUs, info.peersConnected, info.etaTimeString ];
+        cell.downloadRate.text = [NSString stringWithFormat:NSLocalizedString(@"↓DL: %@", @""), info.downloadRateString];
+        cell.uploadRate.text = [NSString stringWithFormat:NSLocalizedString(@"↑UL: %@", @""), info.uploadRateString];
+        //cell.size.text = [NSString stringWithFormat:  NSLocalizedString(@"%@ of %@", @""), info.downloadedEverString, info.totalSizeString ];
+        cell.size.text = [NSString stringWithFormat: NSLocalizedString( @"%@ of %@, uploaded %@ (Ratio %0.2f)", @"" ),
+                          info.downloadedEverString,
+                          info.totalSizeString,
+                          info.uploadedEverString,
+                          info.uploadRatio];
+        
+        cell.statusIcon.iconType = IconCloudTypeDownload;
+        info.downloadRate > 0 ? [cell.statusIcon playDownloadAnimation] : [cell.statusIcon stopDownloadAnimation];
+        
+        cell.buttonStopResume.imageView.image = [UIImage iconPlay];
+        btnImg = [UIImage iconPause];
+        btnTintColor = [UIColor stopColor];
     }
     else if( info.isStopped )
     {
-        detailInfo = @"Paused";
-        progressBarColor = [UIColor colorWithRed:0.8 green:0.8 blue:0.0 alpha:1];
-        cell.downloadRate.text = @"no activity";
-        //cell.downloadRate.textColor = [UIColor lightGrayColor];
-        cell.size.text = [NSString stringWithFormat:@"%@ of %@, uploaded %@ (Ratio %0.2f)", info.downloadedSizeString, info.totalSizeString, info.uploadedEverString, info.uploadRatio];
-        cell.statusIcon.image = _statusIconImages[ICON_STOP];
-
+        detailInfo =  NSLocalizedString(@"Paused", @"TorrentListController torrent info");
+        progressBarColor = [UIColor stopColor];
+        cell.downloadRate.text = NSLocalizedString(@"no activity", @"");
+        //cell.size.text = [NSString stringWithFormat: NSLocalizedString(@"%@ of %@, uploaded %@ (Ratio %0.2f)", @""), info.haveValidString, info.totalSizeString, info.uploadedEverString, info.uploadRatio];
+        
+        cell.size.text = [NSString stringWithFormat: NSLocalizedString(@"%@, uploaded %@ (Ratio %0.2f)", @""),
+                          info.downloadedSizeString,
+                          info.uploadedEverString,
+                          info.uploadRatio];
+        
+        if( ![info.haveValidString isEqual:info.downloadedSizeString] )
+        {
+            cell.size.text = [NSString stringWithFormat: NSLocalizedString( @"%@ of %@, uploaded %@ (Ratio %0.2f)", @"" ),
+                              info.haveValidString,
+                              info.totalSizeString,
+                              info.uploadedEverString,
+                              info.uploadRatio];
+            
+            // FIX : if this torrent is not fully downloaded there is no part of unfinished progress
+            if( info.percentsDone >= 1.0 )
+                cell.progressBar.downloadedProgress = @((CGFloat)info.haveValid / (CGFloat)info.totalSize);
+        }
+        
+        
+        cell.statusIcon.iconType = IconCloudTypeStop;
+        cell.buttonStopResume.imageView.image = [UIImage iconPlay];
+        btnImg = [UIImage iconPlay];
+        btnTintColor = [UIColor seedColor];
     }
     else if( info.isChecking )
     {
-        detailInfo = @"Checking";
-        progressBarColor = [UIColor colorWithRed:0 green:0 blue:0.7 alpha:1];
+        detailInfo =  NSLocalizedString(@"Checking data ...", @"");
+        progressBarColor = [UIColor checkColor];
         cell.progressBar.progress = info.recheckProgress;
         cell.progressPercents.text = info.recheckProgressString;
-        cell.size.text = [NSString stringWithFormat:@"%@ of %@", info.downloadedSizeString, info.downloadedEverString];
-        cell.statusIcon.image = _statusIconImages[ICON_CHECK];
+        
+        // NSString *totSize = formatByteCount( (long long)((double)info.haveValid / info.recheckProgress) );
+        
+        // FIX: need to corect and test
+        //cell.size.text = [NSString stringWithFormat: NSLocalizedString(@"%@ of %@", @""), info.haveValidString, totSize];
+        cell.size.text = [NSString stringWithFormat: NSLocalizedString(@"%@ of %@", @""), info.haveValidString, info.totalSizeString];
+
+        //cell.statusIcon.image = [UIImage iconCheck];
+        cell.statusIcon.iconType = IconCloudTypeCheck;
+        [cell.statusIcon playCheckAnimation];
+        
+        cell.buttonStopResume.hidden = YES;
     }
     
     // because error torrent has native status as "stopped" we
     // should handle this case aside of common "if"
     if( info.isError )
     {
-        detailInfo = [NSString stringWithFormat:@"Error: %@", info.errorString]; //@"Paused due to some error";
-        progressBarColor = [UIColor colorWithRed:0.8 green:0.0 blue:0.0 alpha:1];
-        //cell.downloadRate.text = [NSString stringWithFormat:@"Error[%i]", info.errorNumber];
-        //cell.downloadRate.textColor = [UIColor lightGrayColor];
-        cell.size.text = [NSString stringWithFormat:@"%@ of %@, uploaded %@ (Ratio %0.2f)", info.downloadedSizeString, info.totalSizeString, info.uploadedEverString, info.uploadRatio];
-        cell.statusIcon.image = _statusIconImages[ICON_ERROR];
+        detailInfo = [NSString stringWithFormat: NSLocalizedString(@"Error: %@", @""), info.errorString];
+        progressBarColor = [UIColor errorColor];
+        cell.size.text = [NSString stringWithFormat: NSLocalizedString(@"%@ of %@, uploaded %@ (Ratio %0.2f)", @""), info.downloadedSizeString, info.totalSizeString, info.uploadedEverString, info.uploadRatio];
+        
+        //cell.statusIcon.image = [UIImage iconError];
+        cell.statusIcon.iconType = IconCloudTypeError;
     }
     
     cell.progressBar.tintColor = progressBarColor;
     cell.peersInfo.text = detailInfo;
     cell.statusIcon.tintColor = progressBarColor;
+    cell.buttonStopResume.imageView.image = btnImg;
+    cell.buttonStopResume.tintColor = btnTintColor;
     
-    return cell;
+    // set icons of limits
+    cell.iconRateLimit.hidden = !(info.downloadLimitEnabled || info.uploadLimitEnabled);
+    cell.iconRatioLimit.hidden = !(info.seedRatioMode > 0);
+    cell.iconIdleLimit.hidden = !(info.seedIdleMode > 0);
+    
+    cell.iconRateLimit.image = [cell.iconRateLimit.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    cell.iconIdleLimit.image = [cell.iconIdleLimit.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    cell.iconRatioLimit.image = [cell.iconRatioLimit.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
+
+- (void)playPauseButtonPressed:(UIButton*)sender
+{
+    TRInfo *info = sender.dataObject;
+    sender.enabled = NO;
+    
+    if( _delegate )
+    {
+        if ( info.isStopped &&
+            [_delegate respondsToSelector:@selector(torrentListResumeTorrentWithId:)] )
+        {
+            [_delegate torrentListResumeTorrentWithId:info.trId];
+        }
+        else if( (info.isSeeding || info.isDownloading) &&
+                [_delegate respondsToSelector:@selector(torrentListStopTorrentWithId:)])
+        {
+            [_delegate torrentListStopTorrentWithId:info.trId];
+        }
+    }
 }
 
 @end

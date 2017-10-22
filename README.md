@@ -4,11 +4,11 @@
 
 Rich RPC client for transmission-bt servers.
 As you know, these days almost every modern WiFi home router has a build-in torrent server and it is a transmission-bt. Transmission-bt is great, it's open-sourced and it has a huge fan community.
-Though android community has a lot of client implementations, sadly the iOS-one is lack of that and I think this is a big misfortune. AppStore had some clients with a very poor functionality but even those clients were removed (after I tried to submit this app and had a not very pleasant argue with appstore team about this app). My intention was to create a decent client that I would use every day by myself. Finally after all of the discussions appstore team rejected the app. So I share it for all, download and compile, use and enjoy!
+Though android community has a lot of client implementations, sadly the iOS-one is lack of that and I think this is a big misfortune. AppStore had some clients with a very poor functionality but even those clients were removed (after I tried to submit this app and had a not very pleasant argue with appstore team about this app). My intention was to create a decent client that I would use every day by myself. Finally after all of the discussions appstore team rejected the app. So I share it for all, download/build & compile, use and enjoy, the project is already updated for XCode 9.0 !
 
-**TransShift can:**
+**TransShift can/is:**
 
-- support iOS 7.0 and above
+- support iOS 8.0 and above (actually it's 7.0 ready, but XCode 9 supports only 8.0 min)
 - implement almost 100% of RPC functionality and even more. 
 - universal app
 - minified size, doesn't use any third party libraries, very fast on any device
@@ -37,9 +37,20 @@ Though android community has a lot of client implementations, sadly the iOS-one 
 - the app is localized in English and Russian, additional langs also can be added
 - and many more ...
 
-And here some of the screenshots:
-![Screen](https://preview.ibb.co/ebN7jQ/2017_09_25_11_58_49.png)
-![Screen](https://preview.ibb.co/gCEyr5/2017_09_25_11_59_16.png)
-![Screen](https://preview.ibb.co/i2ZL4Q/2017_09_25_12_00_10.png)
-![Screen](https://preview.ibb.co/fy9WB5/2017_09_25_12_00_41.png)
-![Screen](https://preview.ibb.co/ksD2Jk/2017_09_25_12_01_22.png)
+### iPhone screenshots:
+
+<img src="http://preview.ibb.co/k8YEqm/2017_10_21_16_20_46.png" width="200" align="left">
+<img src="http://preview.ibb.co/kkd3i6/2017_10_21_16_21_15.png" width="200" align="left">
+<img src="http://preview.ibb.co/hSHJGR/2017_10_21_16_21_48.png" width="200" align="left">
+<img src="http://preview.ibb.co/nqPLVm/2017_10_21_16_24_17.png" width="200">
+
+<br/>
+
+### iPad screenshots:
+
+
+<img src="https://preview.ibb.co/ebN7jQ/2017_09_25_11_58_49.png" width="400" align="left" hspace="10" vspace="10">
+<img src="https://preview.ibb.co/gCEyr5/2017_09_25_11_59_16.png" width="400" align="left" hspace="10" vspace="10">
+<img src="https://preview.ibb.co/i2ZL4Q/2017_09_25_12_00_10.png" width="400" align="left" hspace="10" vspace="10">
+<img src="https://preview.ibb.co/fy9WB5/2017_09_25_12_00_41.png" width="400" align="left" hspace="10" vspace="10">
+<img src="https://preview.ibb.co/ksD2Jk/2017_09_25_12_01_22.png" width="400" align="left" hspace="10" vspace="10">

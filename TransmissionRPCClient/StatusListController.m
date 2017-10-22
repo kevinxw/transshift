@@ -11,17 +11,18 @@
 #import "TorrentInfoController.h"
 #import "PeerListController.h"
 #import "FileListController.h"
+#import "TrackerListController.h"
 #import "SessionConfigController.h"
 #import "SpeedLimitController.h"
+#import "PiecesLegendViewController.h"
 #import "RPCConnector.h"
 #import "FooterViewFreeSpace.h"
 #import "HeaderViewDURates.h"
 #import "InfoMessage.h"
 #import "RateLimitTable.h"
+#import "StatusCategories.h"
 
-#define STATUS_SECTION_TITILE       @"Torrents"
-
-#define POPOVER_LIMITSPEEDCONTROLLER_SIZE   CGSizeMake(190,400)
+#define POPOVER_LIMITSPEEDCONTROLLER_SIZE   CGSizeMake(220,400)
 
 
 @interface StatusListController () <RPCConnectorDelegate,
@@ -29,6 +30,7 @@
                                     TorrentInfoControllerDelegate,
                                     PeerListControllerDelegate,
                                     FileListControllerDelegate,
+                                    TrackerListControllerDelegate,
                                     SpeedLimitControllerDelegate,
                                     UIAlertViewDelegate,
                                     UIPopoverControllerDelegate,
@@ -39,11 +41,6 @@
 @implementation StatusListController
 
 {
-    NSArray *_sections;
-    NSArray *_itemNames;
-    NSArray *_itemFilterOptions;
-    NSArray *_itemImages;
-    
     RateLimitTable *_ratesDown;  // holds download speed limits (kb/s)
     RateLimitTable *_ratesUp;    // holds uplaod speed limits (kb/s)
     
@@ -67,6 +64,7 @@
     
     // toolbar buttons
     UIBarButtonItem         *_btnRefresh;
+    UIBarButtonItem         *_btnToggleAltLimits;
     UIBarButtonItem         *_btnLimitDownSpeed;
     UIBarButtonItem         *_btnLimitUpSpeed;
     UIBarButtonItem         *_btnSessionConfig;
@@ -77,19 +75,29 @@
     TorrentInfoController   *_torrentInfoController;      // holds torrent info controller (when torrent is selected from torrent list)
     PeerListController      *_peerListController;         // holds controller for showing peers
     FileListController      *_fileListController;         // holds controller for showing files
+    TrackerListController   *_trackerListController;      // holds controller for showing trackers
+    PiecesLegendViewController *_piecesController;        // holds pieces legend controller
+    
     SessionConfigController *_sessionConfigController;    // holds session config controller
     SpeedLimitController    *_speedLimitController;       // holds speed limit controller
     UIPopoverController     *_speedPopOver;               // holds popover for speed controller
+    
+    // categories
+    StatusCategories        *_items;                      // holds status categories
+    StatusCategory          *_selectedCategory;           // selected category
+    TRInfos                 *_prevTRInfos;                // holds the previous torrents info
  }
 
 - (void)viewDidLoad
 {
     [super viewDidLoad];
     
+    // init all main categories (main model for this view)
+    _items = [[StatusCategories alloc] init];
+    
     _appearedFirstTime = YES;
     
-    // initialize section name and section row names
-    [self initNames];
+    self.clearsSelectionOnViewWillAppear = NO;
     
     // initialize speed limit tables with names
     [self initSpeedLimitTables];
@@ -115,7 +123,7 @@
         }
         else
         {
-            self.footerInfoMessage = @"Autorefreshing is off.\nPull down to refresh data.";
+            self.footerInfoMessage = NSLocalizedString( @"Autorefreshing is off.\nPull down to refresh data.", @"");
         }
     }
     
@@ -129,7 +137,8 @@
         
         _torrentController = (TorrentListController*)rightNav.topViewController;
         // clear all current torrents
-        _torrentController.torrents = nil;
+        //_torrentController.torrents = nil;
+        _torrentController.items = nil;
     }
     else
     {
@@ -146,12 +155,16 @@
                                           action:@selector(autorefreshTimerUpdateHandler)
                                 forControlEvents:UIControlEventValueChanged];
     
-    self.headerInfoMessage = @"Updating ...";
+    self.headerInfoMessage = NSLocalizedString( @"Updating ...", @"StatusList header title");
     
     // configure bottom toolbar buttons
     _btnRefresh = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"iconRefresh20x20"]
                                                    style:UIBarButtonItemStylePlain target:self
                                                   action:@selector(autorefreshTimerUpdateHandler)];
+    
+    _btnToggleAltLimits = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"iconTurtleBlack22x22"]
+                                                           style:UIBarButtonItemStylePlain target:self
+                                                          action:@selector(toggleAltLimits)];
     
     _btnLimitUpSpeed = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"iconTurtleUpload20x20"]
                                                         style:UIBarButtonItemStylePlain
@@ -174,9 +187,10 @@
     
     _btnLimitDownSpeed.enabled =  NO;
     _btnLimitUpSpeed.enabled = NO;
+    _btnToggleAltLimits.enabled = NO;
     _btnSessionConfig.enabled = NO;
     
-    self.toolbarItems = @[ _btnRefresh, _btnSpacer, _btnLimitUpSpeed, _btnSpacer, _btnLimitDownSpeed, _btnSpacer, _btnSessionConfig];
+    self.toolbarItems = @[ _btnRefresh, _btnSpacer, _btnLimitUpSpeed, _btnSpacer, _btnLimitDownSpeed, _btnSpacer, _btnToggleAltLimits, _btnSpacer, _btnSessionConfig];
     
        // configure "add torrent by url" right nav button
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"iconLinkAdd20x20"]
@@ -189,43 +203,19 @@
     _showErrorItems = NO;
 }
 
-- (void)initNames
-{
-    _sections =          @[ STATUS_SECTION_TITILE ];
-    
-    _itemNames =         @[ STATUS_ROW_ALL,
-                            STATUS_ROW_ACTIVE,
-                            STATUS_ROW_DOWNLOAD,
-                            STATUS_ROW_SEED,
-                            STATUS_ROW_STOP,
-                            STATUS_ROW_CHECK,
-                            STATUS_ROW_ERROR ];
-    
-    _itemFilterOptions = @[ @(TRStatusOptionsAll),
-                            @(TRStatusOptionsActive),
-                            @(TRStatusOptionsDownload),
-                            @(TRStatusOptionsSeed),
-                            @(TRStatusOptionsStop),
-                            @(TRStatusOptionsCheck),
-                            @(TRStatusOptionsError) ];
-    
-    _itemImages =        @[ [[UIImage imageNamed:@"allIcon"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate],
-                            [[UIImage imageNamed:@"activeIcon"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate],
-                            [[UIImage imageNamed:@"downloadIcon"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate],
-                            [[UIImage imageNamed:@"uploadIcon"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate],
-                            [[UIImage imageNamed:@"stopIcon"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate],
-                            [[UIImage imageNamed:@"checkIcon"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate],
-                            [[UIImage imageNamed:@"iconErrorTorrent40x40"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] ];
-    
-    _cells = [NSMutableDictionary dictionary];
-}
-
 - (void)initSpeedLimitTables
 {
     // UP rate limits
-    NSArray *titles = @[ @"Unlimited", @"50 Kb/s", @"100 Kb/s",  @"150 Kb/s",
-                         @"200 Kb/s",  @"250 Kb/s",  @"500 Kb/s",
-                         @"750 Kb/s",  @"1024 Kb/s", @"2048 Kb/s" ];
+    NSArray *titles = @[ NSLocalizedString(@"Unlimited", @"Speed limit"),
+                         NSLocalizedString(@"50 Kb/s", @""),
+                         NSLocalizedString(@"100 Kb/s", @""),
+                         NSLocalizedString(@"150 Kb/s", @""),
+                         NSLocalizedString(@"200 Kb/s", @""),
+                         NSLocalizedString(@"250 Kb/s", @""),
+                         NSLocalizedString(@"500 Kb/s", @""),
+                         NSLocalizedString(@"750 Kb/s", @""),
+                         NSLocalizedString(@"1024 Kb/s", @""),
+                         NSLocalizedString(@"2048 Kb/s", @"") ];
     
     NSArray *rates  = @[ @(0),   @(50),  @(100), @(150),
                          @(200), @(250), @(500),
@@ -234,8 +224,8 @@
     _ratesDown = [RateLimitTable tableWithTitles:titles andRates:rates];
     _ratesUp = [RateLimitTable tableWithTitles:titles andRates:rates];
     
-    _ratesDown.tableTitle = @"Limit download speed";
-    _ratesUp.tableTitle = @"Limit upload speed";
+    _ratesDown.tableTitle = NSLocalizedString( @"Limit download speed", @"Speed limit table header" );
+    _ratesUp.tableTitle =  NSLocalizedString( @"Limit upload speed", @"Speed limit table header" );
 }
 
 - (void)showInfoPopup:(NSString*)infoStr
@@ -243,13 +233,15 @@
     UIView *v = self.parentViewController.view;
 
     float factor = 1.2;
+    float h = 50;
+    
     if( self.splitViewController )
     {
-        factor = 2.3;
+        factor = UIDeviceOrientationIsPortrait([UIDevice currentDevice].orientation) ? 1.8 : 2.3;
         v = self.splitViewController.view;
     }
-    
-    InfoMessage *msg = [InfoMessage infoMessageWithSize:CGSizeMake(v.bounds.size.width/factor, 50)];
+
+    InfoMessage *msg = [InfoMessage infoMessageWithSize:CGSizeMake(v.bounds.size.width/factor, h)];
     [msg showInfo:infoStr fromView:v];
 }
 
@@ -258,13 +250,15 @@
     UIView *v = self.parentViewController.view;
     
     float factor = 1.2;
+    float h = 50;
+    
     if( self.splitViewController )
     {
-        factor = 2.3;
+        factor = UIDeviceOrientationIsPortrait([UIDevice currentDevice].orientation) ? 1.8 : 2.3;
         v = self.splitViewController.view;
     }
     
-    InfoMessage *msg = [InfoMessage infoMessageWithSize:CGSizeMake(v.bounds.size.width/factor, 50)];
+    InfoMessage *msg = [InfoMessage infoMessageWithSize:CGSizeMake(v.bounds.size.width/factor, h)];
     [msg showErrorInfo:errStr fromView:v];
 }
 
@@ -279,30 +273,17 @@
     }
     
     // check if it is ipad we shoud and none of rows is selected - select all row (0)
-    if( self.splitViewController && _appearedFirstTime )
-    {
-        if( ![self.tableView indexPathForSelectedRow] )
-        {
-            // select first row
-            // and do it manualy
-            NSIndexPath *path = [NSIndexPath indexPathForRow:0 inSection:0];
-            // make first row selected
-            [self.tableView selectRowAtIndexPath:path animated:YES scrollPosition:UITableViewScrollPositionNone];
-            
-            // set filter to rows
-            [self filterTorrentListWithFilterOptions:TRStatusOptionsAll];
-        }
-    }
-    else
-    {
-        [_connector getAllTorrents];
-    }
-    
-    // at first initialization, get session info
     if( _appearedFirstTime )
+    {
+         if( self.splitViewController )
+            [self selectRowAtIndex:0];
+        
+        [_connector getAllTorrents];
         [_connector getSessionInfo];
+        
+        _appearedFirstTime = NO;
+    }
     
-    _appearedFirstTime = NO;
     self.navigationController.toolbarHidden = NO;
     
     [self fixFooterHeaderViews];
@@ -310,6 +291,8 @@
 
 - (void)viewWillDisappear:(BOOL)animated
 {
+    [super viewWillDisappear:animated];
+    
     self.navigationController.toolbarHidden = YES;
 }
 
@@ -319,7 +302,7 @@
     [_connector stopRequests];
     
     _torrentController.refreshControl = nil;
-    _torrentController.infoMessage = @"There is no selected server";
+    _torrentController.infoMessage =  NSLocalizedString( @"There is no selected server", @"BgMessage" );
 }
 
 // main refresh cycle, updates data in detail view controllers
@@ -328,26 +311,38 @@
     [_connector getAllTorrents];
    
     UINavigationController *nav = _torrentController.navigationController;
+    UIViewController *top = nav.topViewController;
     
-    if( nav.topViewController == _torrentInfoController )
-        [_connector getDetailedInfoForTorrentWithId:_torrentInfoController.torrentId];
-    
-    else if( nav.topViewController == _peerListController)
-        [_connector getAllPeersForTorrentWithId:_peerListController.torrentId];
-    
-    else if( nav.topViewController == _fileListController )
-        [_connector getAllFilesForTorrentWithId:_fileListController.torrentId];
-    
-    else if( _sessionInfo )
+    if( top == _torrentInfoController )
     {
-        // update free space
-        [_connector getFreeSpaceWithDownloadDir:_sessionInfo.downloadDir];
+        [_connector getDetailedInfoForTorrentWithId:_torrentInfoController.torrentId];
+    }
+    else if( top == _peerListController)
+    {
+        [_connector getAllPeersForTorrentWithId:_peerListController.torrentId];
+    }
+    else if( top == _fileListController )
+    {
+        if( !_fileListController.isFullyLoaded )
+            [_connector getAllFileStatsForTorrentWithId:_fileListController.torrentId];
+        //[_connector getAllFilesForTorrentWithId:_fileListController.torrentId];
+    }
+    else if( top == _trackerListController )
+    {
+        [_connector getAllTrackersForTorrentWithId:_trackerListController.torrentId];
+    }
+    else if( top == _piecesController )
+    {
+        [_connector getPiecesBitMapForTorrent:_piecesController.torrentId];
     }
 }
 
 - (void)gotFreeSpaceString:(NSString *)freeSpace
 {
-    NSString *str = [NSString stringWithFormat:@"Free space: %@", freeSpace];
+    //NSLog(@"gotFreeSpace");
+    NSString *str = [NSString stringWithFormat: NSLocalizedString( @"Free space: %@", @"Free space fotter message" ),
+                     freeSpace];
+    
     //self.footerInfoMessage = str;
     [self showFreeSpaceInfoWithString:str];
     
@@ -369,7 +364,7 @@
     _footerViewFreeSpace.label.text = string;
 }
 
-- (void)showHeaderDLRate:(NSString*)dlRate ULRate:(NSString*)ulRate
+- (void)showHeaderDLRate:(TRInfos *)torrents //(NSString*)dlRate ULRate:(NSString*)ulRate
 {
     if( !_headerViewDURates )
     {
@@ -381,8 +376,11 @@
     if( self.tableView.tableHeaderView != _headerViewDURates )
         self.tableView.tableHeaderView = _headerViewDURates;
     
-    _headerViewDURates.uploadString = ulRate;
-    _headerViewDURates.downloadString = dlRate;
+    _headerViewDURates.uploadString = torrents.totalUploadRateString;
+    _headerViewDURates.downloadString = torrents.totalDownloadRateString;
+
+    torrents.totalDownloadRate > 0 ? [_headerViewDURates.iconDL playDownloadAnimation] : [_headerViewDURates.iconDL stopDownloadAnimation];
+    torrents.totalUploadRate > 0 ? [_headerViewDURates.iconUL playUploadAnimation] : [_headerViewDURates.iconUL stopUploadAnimation];
 }
 
 - (void)fixFooterHeaderViews
@@ -410,11 +408,16 @@
 // occured upon rpc request
 - (void)requestToServerSucceeded
 {
+    UIViewController *topVC = _torrentController.navigationController.topViewController;
+    
+    if( [topVC isKindOfClass:[CommonTableController class]] )
+    {
+        CommonTableController *ctc = (CommonTableController*)topVC;
+        [ctc.refreshControl endRefreshing];
+        ctc.errorMessage = nil;
+    }
+
     [self.refreshControl endRefreshing];
-    [_torrentController.refreshControl endRefreshing];
-  
-    // clear error message    
-    //self.headerTitleString = @"Request OK";
 }
 
 // got all torrents, refresh statues
@@ -424,54 +427,130 @@
 {
     [self requestToServerSucceeded];
     
+    NSArray *arr;
+    
+    arr = [_items updateForDeleteWithInfos:torrents];
+    if( arr.count > 0 )
+    {
+        NSMutableArray *indexPathsToDelete = [NSMutableArray array];
+        for( NSNumber* n in arr )
+        {
+            [indexPathsToDelete addObject:[NSIndexPath indexPathForRow:[n intValue] inSection:0]];
+        }
+        
+        [self.tableView beginUpdates];
+        
+        [self.tableView deleteRowsAtIndexPaths:indexPathsToDelete withRowAnimation:UITableViewRowAnimationAutomatic];
+        
+        [self.tableView endUpdates];
+    }
+    
+    arr = [_items updateForInsertWithInfos: torrents];
+    if( arr.count > 0 )
+    {
+        NSMutableArray *indexPathsToInsert = [NSMutableArray array];
+        for( NSNumber* n in arr )
+        {
+            [indexPathsToInsert addObject:[NSIndexPath indexPathForRow:[n intValue] inSection:0]];
+        }
+        
+        [self.tableView beginUpdates];
+        
+        [self.tableView insertRowsAtIndexPaths:indexPathsToInsert withRowAnimation:UITableViewRowAnimationAutomatic];
+        
+        [self.tableView endUpdates];
+    }
+    
     // update numbers
+    // animate icons
+    for( int i = 0; i < _items.countOfVisible; i++ )
+    {
+        StatusCategory *c = [_items categoryAtIndex:i];
+        
+        StatusListCell *cell = (StatusListCell*)c.cell;
+        cell.numberLabel.text = [NSString stringWithFormat:@"%i", c.count];
+        
+        IconCloudType iconType = c.iconType;
+        
+        /// if there are active torrents always animate icon
+        if( iconType == IconCloudTypeActive )
+            c.count > 0 ? [cell.icon playActivityAnimation] : [cell.icon stopActivityAnimation];
+        
+        /// if there are checking torrents always animate icon
+        else if( iconType == IconCloudTypeCheck )
+            c.count > 0 ? [cell.icon playCheckAnimation] : [cell.icon stopCheckAnimation];
+        
+        /// if there are some downloading torrents and rate more then 0 - animate icon
+        else if( iconType == IconCloudTypeDownload )
+            torrents.totalDownloadRate > 0 ? [cell.icon playDownloadAnimation] : [cell.icon stopDownloadAnimation ];
+        
+        /// if threre are some seeding torrents, animate icon only if some of these torents have upload rate > 0
+        else if( iconType == IconCloudTypeUpload )
+        {
+            // FIX: Animate only if there are finished seeding torrents
+            BOOL bAnimate = NO;
+            for( TRInfo *i in torrents.seedingTorrents )
+            {
+                if( i.uploadRate > 0 )
+                {
+                    // no need to continue
+                    bAnimate = YES;
+                    break;
+                }
+            }
+            
+            bAnimate ? [cell.icon playUploadAnimation] : [cell.icon stopUploadAnimation];
+        }
+    }
+    
+    _torrentController.items = _selectedCategory;
+    
+    [self showFinishedTorrentsWithInfo:torrents];
 
-    [self setCount:torrents.allCount      forCellWithTitle:STATUS_ROW_ALL];
-    [self setCount:torrents.activeCount   forCellWithTitle:STATUS_ROW_ACTIVE];
-    [self setCount:torrents.checkCount    forCellWithTitle:STATUS_ROW_CHECK];
-    [self setCount:torrents.downloadCount forCellWithTitle:STATUS_ROW_DOWNLOAD];
-    [self setCount:torrents.seedCount     forCellWithTitle:STATUS_ROW_SEED];
-    [self setCount:torrents.stopCount     forCellWithTitle:STATUS_ROW_STOP];
+    [self showHeaderDLRate:torrents]; // torrents.totalDownloadRateString ULRate:torrents.totalUploadRateString];
     
-    if( torrents.errorCount > 0 )
-    {
-        if( _showErrorItems )
-        {
-            [self setCount:torrents.errorCount forCellWithTitle:STATUS_ROW_ERROR];
-        }
-        else
-        {
-            _showErrorItems = YES;
-            // add new row to table
-            [self.tableView beginUpdates];
-            
-            [self.tableView insertRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:6 inSection:0]]
-                                  withRowAnimation:UITableViewRowAnimationAutomatic];
-            
-            [self.tableView endUpdates];
-            
-            [self setCount:torrents.errorCount forCellWithTitle:STATUS_ROW_ERROR];
-        }
-    }
-    else
-    {
-        if( _showErrorItems )
-        {
-            _showErrorItems = NO;
-            //[self.tableView reloadData];
-            [self.tableView beginUpdates];
-            [self.tableView deleteRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:6 inSection:0]]
-                                  withRowAnimation:UITableViewRowAnimationAutomatic];
-            [self.tableView endUpdates];
-        }
-    }
+//    if( !self.splitViewController )
+//    {
+//        NSString *str = [NSString stringWithFormat:NSLocalizedString(@"↑UL:%@ ↓DL:%@", @""),
+//                         torrents.totalUploadRateString,
+//                         torrents.totalDownloadRateString];
+//
+//        _torrentController.headerInfoMessage = str;
+//    }
     
+    if( _config.showFreeSpace && _sessionInfo && self.navigationController.visibleViewController == self )
+        [_connector getFreeSpaceWithDownloadDir:_sessionInfo.downloadDir];
+}
+
+- (void)toggleAltLimits
+{
+    if( _sessionInfo )
+    {
+        BOOL toogleMode = !_sessionInfo.altLimitEnabled;
+        [_connector toggleAltLimitMode:toogleMode];
+    }
+}
+
+-(void)gotToggledAltLimitMode:(BOOL)altLimitEnabled
+{
+    _sessionInfo.altLimitEnabled = altLimitEnabled;
+    
+     _btnToggleAltLimits.image = altLimitEnabled ? [UIImage imageNamed:@"iconTurtleBlackCrossed22x22"] : [UIImage imageNamed:@"iconTurtleBlack22x22"];
+    
+    [self showInfoPopup: altLimitEnabled ?  NSLocalizedString(@"Alternative limits is on", @"") :
+     NSLocalizedString(@"Alternative limits is off", @"") ];
+    
+    [_connector getSessionInfo];
+}
+
+- (void)showFinishedTorrentsWithInfo:(TRInfos*)torrents
+{
     // show torrents in list controller (update)
     // find torrents that are finished downloading
-    TRInfos *prev = _torrentController.torrents;
-    if( prev )
+    //TRInfos *prev = _torrentController.torrents;
+    if( _prevTRInfos )
     {
-        NSArray *dtors = prev.downloadingTorrents;
+        NSArray *dtors = _prevTRInfos.downloadingTorrents;
         NSArray *stors = torrents.seedingTorrents;
         
         NSMutableString *sInfo = [NSMutableString string];
@@ -483,7 +562,7 @@
                 if( st.trId == dt.trId )
                 {
                     // we have found finished torrent need to
-                    [sInfo appendString:[NSString stringWithFormat:@"Torrent: %@\n has finished downloading\n", st.name]];
+                    [sInfo appendString:[NSString stringWithFormat:NSLocalizedString( @"Torrent: %@\n has finished downloading\n", @""), st.name]];
                 }
             }
         }
@@ -510,45 +589,19 @@
         }
         
     } // end of finding finished torrents
+    //_torrentController.torrents = torrents;
+    _prevTRInfos = torrents;
     
-    _torrentController.torrents = torrents;
-    
-    NSString *str = [NSString stringWithFormat:@"↑UL:%@ ↓DL:%@",
-                              torrents.totalUploadRateString,
-                              torrents.totalDownloadRateString];
-    
-    
-    
-    [self showHeaderDLRate:torrents.totalDownloadRateString ULRate:torrents.totalUploadRateString];
-    
-    //self.headerInfoMessage = str;
-    if( !self.splitViewController )
-        _torrentController.headerInfoMessage = str;
-    //[self setHeaderUploadRate:torrents.totalUploadRateString andDownloadRate:torrents.totalDownloadRateString];
-}
-
-- (void)setCount:(int)count forCellWithTitle:(NSString*)cellTitle
-{
-    StatusListCell *cell = _cells[cellTitle];
-    if( cell )
-    {
-        cell.numberLabel.text = [NSString stringWithFormat:@"%i", count];
-        
-        // set icon in gray if there are not items
-        cell.iconImg.tintColor = count > 0 ? cell.tintColor : [UIColor lightGrayColor];
-        if( [cellTitle isEqualToString:STATUS_ROW_ERROR] )
-            cell.iconImg.tintColor = [UIColor colorWithRed:0.8 green:0 blue:0 alpha:1];
-    }
 }
 
 // shows alert view for adding torrent by URL (magnet url also)
 - (void)showAddTorrentByURLDialog
 {
-    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Add torrent"
-                                                    message:@"Type URL or MAGNET URL"
+    UIAlertView *alert = [[UIAlertView alloc] initWithTitle: NSLocalizedString( @"Add torrent", @"" )
+                                                    message: NSLocalizedString( @"Type URL or MAGNET URL", @"" )
                                                    delegate:self
-                                          cancelButtonTitle:@"Cancel"
-                                          otherButtonTitles:@"Add torrent", nil];
+                                          cancelButtonTitle: NSLocalizedString( @"Cancel", @"" )
+                                          otherButtonTitles: NSLocalizedString( @"Add torrent", @""), nil];
     
     alert.delegate = self;
     alert.alertViewStyle = UIAlertViewStylePlainTextInput;
@@ -558,10 +611,10 @@
 
 - (void)gotTorrentAdded
 {
-    [self showInfoPopup:@"New torrent was added"];
+    [self showInfoPopup: NSLocalizedString(@"New torrent was added",@"float info message")];
 }
 
-#pragma mark - Alert View delegate methods
+#pragma mark - UIAlertView delegate methods, add torrent by URL
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
 {
     if( buttonIndex != alertView.cancelButtonIndex )
@@ -580,7 +633,7 @@
     _speedLimitController.preferredContentSize = POPOVER_LIMITSPEEDCONTROLLER_SIZE;
     _speedLimitController.rates = _ratesDown;
     _speedLimitController.delegate = self;
-    _speedLimitController.title = @"Download speed limits";
+    _speedLimitController.title =  NSLocalizedString(@"Download speed limits", @"_speedLimitController title");
     _speedLimitController.isDownload = YES;
     
     if( self.splitViewController )
@@ -588,7 +641,8 @@
         if( _speedPopOver && _speedPopOver.isPopoverVisible )
             [_speedPopOver dismissPopoverAnimated:YES];
         
-        _speedPopOver = [[UIPopoverController alloc] initWithContentViewController:_speedLimitController];
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:_speedLimitController];
+        _speedPopOver = [[UIPopoverController alloc] initWithContentViewController:nav];
         _speedPopOver.delegate = self;
 
         [_speedPopOver presentPopoverFromBarButtonItem:sender permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES];
@@ -605,7 +659,7 @@
     _speedLimitController.preferredContentSize = POPOVER_LIMITSPEEDCONTROLLER_SIZE;
     _speedLimitController.rates = _ratesUp;
     _speedLimitController.delegate = self;
-    _speedLimitController.title = @"Upload speed limits";
+    _speedLimitController.title =  NSLocalizedString(@"Upload speed limits", @"_speedLimitController title");
     _speedLimitController.isDownload = NO;
     
     if( self.splitViewController )
@@ -613,7 +667,8 @@
         if( _speedPopOver && _speedPopOver.isPopoverVisible )
             [_speedPopOver dismissPopoverAnimated:YES];
         
-        _speedPopOver = [[UIPopoverController alloc] initWithContentViewController:_speedLimitController];
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController: _speedLimitController];
+        _speedPopOver = [[UIPopoverController alloc] initWithContentViewController:nav];
         _speedPopOver.delegate = self;
         
         [_speedPopOver presentPopoverFromBarButtonItem:sender permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES];
@@ -639,11 +694,12 @@
         
         if( _ratesDown.selectedRate == 0)
         {
-            [self showInfoPopup:@"Disable download speed limit"];
+            [self showInfoPopup: NSLocalizedString(@"Disablilng download speed limit", @"")];
         }
         else
         {
-            [self showInfoPopup:[NSString stringWithFormat:@"Setting download speed limit to %i KB/s", _ratesDown.selectedRate]];
+            [self showInfoPopup:[NSString stringWithFormat: NSLocalizedString(@"Setting download speed limit to %i KB/s", @""),
+                                 _ratesDown.selectedRate]];
         }
     }
     else
@@ -652,11 +708,12 @@
         
         if( _ratesUp.selectedRate == 0)
         {
-            [self showInfoPopup:@"Disable upload speed limit"];
+            [self showInfoPopup: NSLocalizedString(@"Disabling upload speed limit",@"float info")];
         }
         else
         {
-            [self showInfoPopup:[NSString stringWithFormat:@"Setting upload speed limit to %i KB/s", _ratesUp.selectedRate]];
+            [self showInfoPopup:[NSString stringWithFormat: NSLocalizedString(@"Setting upload speed limit to %i KB/s", @"float info"),
+                                 _ratesUp.selectedRate]];
         }
     }
     
@@ -671,9 +728,10 @@
 - (void)showSessionConfiguration
 {
     _sessionConfigController = instantiateController(CONTROLLER_ID_SESSIONCONFIG);
-    _sessionConfigController.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave
-                                                                                                               target:self
-                                                                                                               action:@selector(saveSessionParametes)];
+    _sessionConfigController.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Apply", nil)
+                                                                                                  style:UIBarButtonItemStylePlain
+                                                                                                 target:self
+                                                                                                 action:@selector(saveSessionParametes)];
     [self.navigationController pushViewController:_sessionConfigController animated:YES];
     
     [_connector getSessionInfo];
@@ -703,7 +761,7 @@
 {
     // getting session information for the first time
     // get free space (fix)
-    if( !_sessionInfo )
+    if( !_sessionInfo && _config.showFreeSpace )
         [_connector getFreeSpaceWithDownloadDir:info.downloadDir];
         
     _sessionInfo = info;
@@ -717,6 +775,9 @@
     _btnSessionConfig.enabled = YES;
     _btnLimitDownSpeed.enabled = YES;
     _btnLimitUpSpeed.enabled = YES;
+    _btnToggleAltLimits.enabled = YES;
+    
+    _btnToggleAltLimits.image = info.altLimitEnabled ? [UIImage imageNamed:@"iconTurtleBlackCrossed22x22"] : [UIImage imageNamed:@"iconTurtleBlack22x22"];
     
     // show/hide limit icon
     _headerViewDURates.upLimitIsOn =  info.upLimitEnabled || info.altLimitEnabled;
@@ -750,40 +811,115 @@
 - (void)gotSessionSetWithInfo:(TRSessionInfo *)info
 {
     [self gotSessionWithInfo:info];
-    [self showInfoPopup:@"Settings are saved"];
+    [self showInfoPopup: NSLocalizedString(@"Settings have been saved", @"float info message")];
 }
 
 #pragma mark - RPCConnector error hangling
 
-// RPCConnector signals error
+/// RPCConnector signals error
 - (void)connector:(RPCConnector *)cn complitedRequestName:(NSString *)requestName withError:(NSString *)errorMessage
 {
     // end of refreshing (if it is)
     [self.refreshControl endRefreshing];
-    [_torrentController.refreshControl endRefreshing];
     
+    // for some errors we show popup message
     if( [requestName isEqualToString:TR_METHODNAME_TORRENTADD] ||
         [requestName isEqualToString:TR_METHODNAME_TORRENTADDURL] )
     {
         [self showErrorPopup:errorMessage];
         return;
     }
-    
-    
-    // show error to background
-    //_torrentController.infoMessage = errorMessage;
-    _torrentController.torrents = nil;
-    _torrentController.errorMessage = errorMessage;
-    self.errorMessage = errorMessage;
-    
-    UINavigationController *nav = _torrentController.navigationController;
-    if( _torrentInfoController && nav.visibleViewController == _torrentInfoController )
+    else if ( [requestName isEqualToString:TR_METHODNAME_TESTPORT] )
     {
-        [_torrentInfoController showErrorMessage:errorMessage];
+        [self showErrorPopup:
+         [NSString stringWithFormat: NSLocalizedString(@"Can not test port, %@", nil), errorMessage] ];
+        return;
     }
+    else if( [requestName isEqualToString:TR_METHODNAME_FREESPACE] )
+    {
+        [self showErrorPopup:
+         [NSString stringWithFormat: NSLocalizedString(@"Can not get free space, %@", nil), errorMessage] ];
+        return;
+    }
+    else if( [requestName isEqualToString:TR_METHODNAME_TORRENTSETNAME] )
+    {
+        [self showErrorPopup:
+         [NSString stringWithFormat: NSLocalizedString(@"Can not rename torrent, %@", nil), errorMessage] ];
+        return;
+    }
+
+    /// show error in top view controller (if it is)
+    UIViewController *vc = _torrentController.navigationController.topViewController;
+    if( [vc isKindOfClass:[CommonTableController class]] )
+    {
+        CommonTableController *topVC = (CommonTableController*)vc;
+        [topVC.refreshControl endRefreshing];
+        
+        topVC.errorMessage = errorMessage;
+    }
+
+    _torrentController.items = nil;
+    self.errorMessage = errorMessage;
 }
 
 #pragma mark - TorrentInfoController delegate methods
+
+- (void)showPiecesLegendForTorrentWithId:(int)torrentId piecesCount:(NSInteger)piecesCount pieceSize:(long long)pieceSize
+{
+    //if( !_piecesController )
+    {
+        _piecesController = instantiateController( CONTROLLER_ID_PIECESLEGEND );
+        _piecesController.pieceSize = pieceSize;
+        _piecesController.piecesCount = piecesCount;
+        _piecesController.torrentId = torrentId;
+        _piecesController.title = NSLocalizedString( @"Torrent pieces bitmap", nil );
+        
+        UINavigationController *nav = _torrentController.navigationController;
+        [nav pushViewController:_piecesController animated:YES];
+        
+        [_connector getPiecesBitMapForTorrent:torrentId];
+    }
+}
+
+- (void)gotPiecesBitmap:(NSData *)piecesBitmap forTorrentWithId:(int)torrentId
+{
+    if( _piecesController )
+    {
+        _piecesController.piecesBitmap = piecesBitmap;
+    }
+}
+
+- (void)renameTorrentWithId:(int)torrentId withNewName:(NSString *)newName andPath:(NSString *)path
+{
+    [_connector renameTorrent:torrentId withName:newName andPath:path];
+}
+
+- (void)gotTorrentRenamed:(int)torrentId withName:(NSString *)name andPath:(NSString *)path
+{
+    [self showInfoPopup: NSLocalizedString(@"Torrent has been renamed", nil)];
+
+    UINavigationController *nav = _torrentController.navigationController;
+    
+    if( nav.topViewController == _torrentInfoController )
+    {
+        [_connector getDetailedInfoForTorrentWithId:torrentId];
+    }
+    else if( nav.topViewController == _fileListController )
+    {
+        [_connector getAllFilesForTorrentWithId:torrentId];
+    }
+}
+
+- (void)getMagnetURLforTorrentWithId:(int)torrentId
+{
+    [_connector getMagnetURLforTorrentWithId:torrentId];
+}
+
+- (void)gotMagnetURL:(NSString *)urlString forTorrentWithId:(int)torrentId
+{
+    if( _torrentInfoController )
+    _torrentInfoController.magnetURL = urlString;
+}
 
 - (void)stopTorrentWithId:(int)torrentId
 {
@@ -794,8 +930,26 @@
 
 - (void)gotTorrentStopedWithId:(int)torrentId
 {
-    [_connector getDetailedInfoForTorrentWithId:torrentId];
-    [self showInfoPopup:@"Torrent was stopped"];
+    // NSLog(@"%s, id: %i", __PRETTY_FUNCTION__, torrentId);
+    
+    UIViewController *topVC = _torrentController.navigationController.topViewController;
+    
+    if( topVC == _torrentInfoController )
+    {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(),
+        ^{
+            [_connector getDetailedInfoForTorrentWithId:torrentId];
+        });
+    }
+    else if( topVC == _torrentController )
+    {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(),
+        ^{
+            [_connector getAllTorrents];            
+         });
+    }
+    
+    [self showInfoPopup: NSLocalizedString(@"Torrent is stopping ...", @"float info message")];
 }
 
 -(void)resumeTorrentWithId:(int)torrentId
@@ -807,9 +961,19 @@
 
 - (void)gotTorrentResumedWithId:(int)torrentId
 {
-    [_connector getDetailedInfoForTorrentWithId:torrentId];
-    [self showInfoPopup:@"Torrent was resumed"];
+    UIViewController *topVC = _torrentController.navigationController.topViewController;
+    
+    if( topVC == _torrentInfoController )
+        [_connector getDetailedInfoForTorrentWithId:torrentId];
+    else if( topVC == _torrentController )
+    {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(),
+        ^{
+            [_connector getAllTorrents];
+         });
+    }
 
+    [self showInfoPopup: NSLocalizedString(@"Torrent is starting ...", @"float info message")];
 }
 
 -(void)verifyTorrentWithId:(int)torrentId
@@ -820,7 +984,7 @@
 - (void)gotTorrentVerifyedWithId:(int)torrentId
 {
     [_connector getDetailedInfoForTorrentWithId:torrentId];
-    [self showInfoPopup:@"Torrent is verifying ..."];
+    [self showInfoPopup:  NSLocalizedString(@"Torrent is verifying ...", @"float info message")];
 }
 
 // delegate method from TorrentInfoController
@@ -853,7 +1017,7 @@
 {
     //[_connector getDetailedInfoForTorrentWithId:torrentId];
     [_connector getAllTorrents];
-    [self showInfoPopup:@"Torrent was deleted"];
+    [self showInfoPopup: NSLocalizedString(@"Torrent was deleted", @"float info message")];
 }
 
 - (void)reannounceTorrentWithId:(int)torrentId
@@ -865,12 +1029,12 @@
 - (void)gotTorrentReannouncedWithId:(int)torrentId
 {
     [_connector getDetailedInfoForTorrentWithId:torrentId];
-    [self showInfoPopup:@"Torrent is reannouncing ..."];
+    [self showInfoPopup: NSLocalizedString(@"Torrent is reannouncing ...", @"float info message")];
 }
 
 - (void)gotTorrentDetailedInfo:(TRInfo *)torrentInfo
 {
-    if( _torrentInfoController )
+    if( _torrentInfoController && _torrentInfoController.torrentId == torrentInfo.trId )
     {
         [_torrentInfoController updateData:torrentInfo];
     }
@@ -883,12 +1047,45 @@
 
 #pragma mark - TorrentListController delegate methods
 
+- (void)torrentListStopTorrentWithId:(int)torrentId
+{
+    [_connector stopTorrent:torrentId];
+}
+
+- (void)torrentListStopAllTorrents
+{
+    [_connector stopAllTorrents];
+    [self showInfoPopup:NSLocalizedString(@"Stopping all torrents ...", @"") ];
+}
+
+- (void)gotAllTorrentsStopped
+{
+    [_connector getAllTorrents];
+}
+
+- (void)torrentListStartAllTorrents
+{
+    [_connector resumeAllTorrents];
+    [self showInfoPopup:NSLocalizedString(@"Starting all torrents ...", @"") ];
+}
+
+- (void)gotAlltorrentsResumed
+{
+    [_connector getAllTorrents];
+}
+
+- (void)torrentListResumeTorrentWithId:(int)torrentId
+{
+    [_connector resumeTorrent:torrentId];
+}
+
 // shows view controller with detailed info
 - (void)showDetailedInfoForTorrentWithId:(int)torrentId
 {
     _torrentInfoController = instantiateController( CONTROLLER_ID_TORRENTINFO );
     _torrentInfoController.torrentId = torrentId;
     _torrentInfoController.delegate = self;
+    _torrentInfoController.title = NSLocalizedString(@"Torrent details", nil);
     
     // we should make a request to RPCConnector
     // (upon complite, info controller will be updated)
@@ -902,14 +1099,15 @@
     [nav pushViewController:_torrentInfoController animated:YES];
 }
 
-#pragma mark - TorrentInfoControllerDelegate
+#pragma mark - PeerListControllerDelegate
 
 - (void)showPeersForTorrentWithId:(int)torrentId
 {
     _peerListController = instantiateController( CONTROLLER_ID_PEERLIST );
     _peerListController.delegate = self;
     _peerListController.torrentId = torrentId;
-    _peerListController.title = @"Peers"; //[NSString stringWithFormat:@"Peers: %@", _torrentInfoController.title];
+    _peerListController.title =  NSLocalizedString(@"Peers", @"_peerListController title");
+    _peerListController.infoMessage = NSLocalizedString(@"Getting peers ...", nil);
     
     UINavigationController *nav = _torrentController.navigationController;
     [nav pushViewController:_peerListController animated:YES];
@@ -917,11 +1115,11 @@
     [_connector getAllPeersForTorrentWithId:torrentId];
 }
 
-- (void)gotAllPeers:(NSArray *)peerInfos forTorrentWithId:(int)torrentId
+- (void)gotAllPeers:(NSArray *)peerInfos withPeerStat:(TRPeerStat *)stat forTorrentWithId:(int)torrentId
 {
     if( _peerListController )
     {
-        _peerListController.peers = peerInfos;
+        [_peerListController updateWithPeers:peerInfos andPeerStat:stat];
     }
 }
 
@@ -930,28 +1128,49 @@
     [_connector getAllPeersForTorrentWithId:torrentId];
 }
 
+#pragma mark - FileListControllerDelegate methods
+
 - (void)showFilesForTorrentWithId:(int)torrentId
 {
     _fileListController = instantiateController( CONTROLLER_ID_FILELIST );
     _fileListController.delegate = self;
     _fileListController.torrentId = torrentId;
-    _fileListController.title = @"Files";//[NSString stringWithFormat:@"Files: %@", _torrentInfoController.title];
+    _fileListController.title =  NSLocalizedString(@"Files", @"_fileListController title");
     
     UINavigationController *nav = _torrentController.navigationController;
     [nav pushViewController:_fileListController animated:YES];
     
+    _fileListController.infoMessage = NSLocalizedString(@"Getting files for torrent ...", @"");
+    
+    // make first request to ge all file infos for torrent
     [_connector getAllFilesForTorrentWithId:torrentId];
 }
 
-- (void)gotAllFiles:(NSArray *)fileInfos forTorrentWithId:(int)torrentId
+- (void)gotAllFiles:(FSDirectory *)fsDir forTorrentWithId:(int)torrentId
 {
     if( _fileListController )
-        _fileListController.fileInfos = fileInfos;
+    {
+        _fileListController.infoMessage = nil;
+        _fileListController.fsDir = fsDir;
+    }
+}
+
+- (void)gotAllFileStats:(NSArray *)fileStats forTorrentWithId:(int)torrentId
+{
+    if( _fileListController )
+    {
+        _fileListController.fileStats =fileStats;
+    }
+}
+
+- (void)fileListControllerRenameTorrent:(int)torrentId oldItemName:(NSString *)oldItemName newItemName:(NSString *)newItemName
+{
+    [_connector renameTorrent:torrentId withName:newItemName andPath:oldItemName];
 }
 
 - (void)fileListControllerNeedUpdateFilesForTorrentWithId:(int)torrentId
 {
-    [_connector getAllFilesForTorrentWithId:torrentId];
+    [_connector getAllFileStatsForTorrentWithId:torrentId];
 }
 
 - (void)fileListControllerResumeDownloadingFilesWithIndexes:(NSArray *)indexes forTorrentWithId:(int)torrentId
@@ -959,9 +1178,25 @@
     [_connector resumeDownloadingFilesWithIndexes:indexes forTorrentWithId:torrentId];
 }
 
+- (void)gotFilesResumedToDownload:(NSArray *)filesIndexes forTorrentWithId:(int)torrentId
+{
+    if( _fileListController )
+    {
+        [_fileListController resumedToDownloadFilesWithIndexes:filesIndexes];
+    }
+}
+
 - (void)fileListControllerStopDownloadingFilesWithIndexes:(NSArray *)indexes forTorrentWithId:(int)torrentId
 {
     [_connector stopDownloadingFilesWithIndexes:indexes forTorrentWithId:torrentId];
+}
+
+- (void)gotFilesStoppedToDownload:(NSArray *)filesIndexes forTorrentWithId:(int)torrentId
+{
+    if( _fileListController )
+    {
+        [_fileListController stoppedToDownloadFilesWithIndexes:filesIndexes];
+    }
 }
 
 - (void)fileListControllerSetPriority:(int)priority forFilesWithIndexes:(NSArray *)indexes forTorrentWithId:(int)torrentId
@@ -969,72 +1204,124 @@
     [_connector setPriority:priority forFilesWithIndexes:indexes forTorrentWithId:torrentId];
 }
 
-// set the filter of TorrentListController
-// and fetching all torrents
-- (void)filterTorrentListWithFilterOptions:(TRStatusOptions)filterOptions
+#pragma mark - TrackerListControllerDelegate methods
+
+- (void)showTrackersForTorrentWithId:(int)torrentId
 {
-    _torrentController.title = @"Torrents";
-    _torrentController.popoverButtonTitle = self.title;
-    _torrentController.filterOptions = filterOptions;
+    _trackerListController = instantiateController(CONTROLLER_ID_TRACKERLIST);
+    _trackerListController.delegate = self;
+    _trackerListController.torrentId = torrentId;
+    _trackerListController.title = NSLocalizedString(@"Trackers", @"");
     
-    // on iPhone we should show _torrentController instead of ours
-    if( !self.splitViewController )
-    {
-        [self.navigationController pushViewController:_torrentController animated:YES];
-    }
-    else
-    {
-        // on iPad show torrent list
-        [_torrentController.navigationController popToRootViewControllerAnimated:YES];
-    }
+    UINavigationController *nav = _torrentController.navigationController;
+    [nav pushViewController:_trackerListController animated:YES];
     
-    // fetch data for all torrents
-    [_connector getAllTorrents];
+    [_connector getAllTrackersForTorrentWithId:torrentId];
+}
+
+- (void)gotAllTrackers:(NSArray *)trackerStats forTorrentWithId:(int)torrentId
+{
+    if( _trackerListController )
+        _trackerListController.trackers = trackerStats;
+}
+
+- (void)trackerListNeedUpdateDataForTorrentWithId:(int)torrentId
+{
+    [_connector getAllTrackersForTorrentWithId:torrentId];
+}
+
+- (void)trackerListRemoveTracker:(int)trackerId forTorrent:(int)torrentId
+{
+    [_connector removeTracker:trackerId forTorrent:torrentId];
+}
+
+- (void)gotTrackerRemoved:(int)trackerId forTorrentWithId:(int)torrentId
+{
+    [self showInfoPopup:NSLocalizedString(@"Tracker has been removed", @"")];
+    [_connector getAllTrackersForTorrentWithId:torrentId];
+}
+
+- (void)applyTorrentSettings:(TRInfo *)info forTorrentWithId:(int)torrentId
+{
+    if( _torrentInfoController )
+    {
+        UINavigationController *nav = _torrentInfoController.navigationController;
+        [nav popViewControllerAnimated:YES];
+
+        //NSLog(@"Setting torrent individual settings ... ");
+        [_connector setSettings:info forTorrentWithId:torrentId];
+    }
+}
+
+- (void)gotSetSettingsForTorrentWithId:(int)torrentId
+{
+    [self showInfoPopup:NSLocalizedString(@"Torrent settings has been applied", @"")];
 }
 
 #pragma mark - TableView delegate
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    TRStatusOptions filterOption = [_itemFilterOptions[indexPath.row] unsignedIntValue];
+    [self selectRowAtIndex:(int)indexPath.row];
+}
+
+- (void)selectRowAtIndex:(int)rowIndex
+{
+    if( !self.tableView.indexPathForSelectedRow || self.tableView.indexPathForSelectedRow.row != rowIndex )
+    {
+        [self.tableView selectRowAtIndexPath:[NSIndexPath indexPathForRow:rowIndex inSection:9]
+                                    animated:NO
+                              scrollPosition:UITableViewScrollPositionNone];        
+    }
     
-    [self filterTorrentListWithFilterOptions: filterOption];
+    _selectedCategory  = [_items categoryAtIndex: rowIndex];
+    
+    _torrentController.items = _selectedCategory;
+    _torrentController.title = NSLocalizedString(@"Torrents", @"");
+    _torrentController.popoverButtonTitle = self.title;
+    
+    // on iPhone we should show _torrentController instead of ours
+    if( !self.splitViewController )
+        [self.navigationController pushViewController:_torrentController animated:YES];
+    else
+        // on iPad show torrent list
+        [_torrentController.navigationController popToRootViewControllerAnimated:YES];
+    // [_connector getAllTorrents];
 }
 
 #pragma mark - Table view data source
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section
 {
-    return _sections[section];
+    return NSLocalizedString(@"Torrents", @"");
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
-    return _sections.count;
+    return _items.countOfVisible > 0 ? 1 : 0;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
-    NSInteger c =  _itemNames.count - 1;
-    if( _showErrorItems )
-        c++;
-    
-    return c;
+    return _items.countOfVisible;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    NSString *title = _itemNames[indexPath.row];
+    StatusCategory *c = [_items categoryAtIndex:(int)indexPath.row];
     
     StatusListCell *cell = [tableView dequeueReusableCellWithIdentifier:CELL_ID_STATUSLIST forIndexPath:indexPath];
     
     // Configure the cell
     cell.numberLabel.text  = @" ";
-    cell.statusLabel.text = title;
-    cell.iconImg.image = _itemImages[ indexPath.row ];
+    cell.statusLabel.text = c.title;
     
-    // save the cell
-    _cells[title] = cell;
+    cell.icon.iconType = c.iconType;
+    cell.icon.tintColor = c.iconColor ? c.iconColor : cell.tintColor;
+      
+    // store cell reference for later cell
+    // updating
+    c.cell = cell;
     
     return cell;
 }

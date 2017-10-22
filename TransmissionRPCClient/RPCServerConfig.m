@@ -4,15 +4,16 @@
 
 #import "RPCServerConfig.h"
 
-static NSString *CODER_NAME = @"name";
-static NSString *CODER_RPC_PATH = @"path";
-static NSString *CODER_USER_NAME = @"username";
-static NSString *CODER_USER_PASSWORD = @"pass";
-static NSString *CODER_PORT = @"port";
-static NSString *CODER_HOST = @"host";
-static NSString *CODER_USE_SSL = @"ssl";
-static NSString *CODER_REFRESH_TIMEOUT = @"time";
-static NSString *CODER_REQUEST_TIMEOUT = @"reqtimeout";
+static NSString * const CODER_NAME = @"name";
+static NSString * const CODER_RPC_PATH = @"path";
+static NSString * const CODER_USER_NAME = @"username";
+static NSString * const CODER_USER_PASSWORD = @"pass";
+static NSString * const CODER_PORT = @"port";
+static NSString * const CODER_HOST = @"host";
+static NSString * const CODER_USE_SSL = @"ssl";
+static NSString * const CODER_REFRESH_TIMEOUT = @"time";
+static NSString * const CODER_REQUEST_TIMEOUT = @"reqtimeout";
+static NSString * const CODER_SHOW_FREESPACE = @"showFreeSpace";
 
 @implementation RPCServerConfig
 
@@ -29,6 +30,7 @@ static NSString *CODER_REQUEST_TIMEOUT = @"reqtimeout";
         _rpcPath = RPC_DEFAULT_PATH;
         _refreshTimeout = RPC_DEFAULT_REFRESH_TIME;
         _requestTimeout = RPC_DEFAULT_REQUEST_TIMEOUT;
+        _showFreeSpace = RPC_DEFAULT_SHOWFREESPACE;
     }
     
     return self;
@@ -49,8 +51,8 @@ static NSString *CODER_REQUEST_TIMEOUT = @"reqtimeout";
 {
     if( ![_rpcPath hasPrefix:@"/"] )
         _rpcPath = [NSString stringWithFormat:@"/%@", _rpcPath];
+    
     return [NSString stringWithFormat:@"%@://%@:%i%@", _useSSL ? @"https" : @"http", _host, _port, _rpcPath];
-    //return [NSString stringWithFormat:@"%@://%@:%i", _useSSL ? @"https" : @"http", _host, _port];
 }
 
 #pragma mark - NSCoding protocol imp
@@ -69,6 +71,7 @@ static NSString *CODER_REQUEST_TIMEOUT = @"reqtimeout";
         _useSSL = [aDecoder decodeBoolForKey:CODER_USE_SSL];
         _refreshTimeout = [aDecoder decodeIntForKey:CODER_REFRESH_TIMEOUT];
         _requestTimeout = [aDecoder decodeIntForKey:CODER_REQUEST_TIMEOUT];
+        _showFreeSpace = [aDecoder decodeBoolForKey:CODER_SHOW_FREESPACE];
     }
     
     return  self;
@@ -85,6 +88,7 @@ static NSString *CODER_REQUEST_TIMEOUT = @"reqtimeout";
     [coder encodeInt:self.refreshTimeout forKey: CODER_REFRESH_TIMEOUT];
     [coder encodeInt:self.requestTimeout forKey:CODER_REQUEST_TIMEOUT];
     [coder encodeBool:self.useSSL forKey:CODER_USE_SSL];
+    [coder encodeBool:self.showFreeSpace forKey:CODER_SHOW_FREESPACE];
 }
 
 - (NSDictionary *)plist
@@ -98,7 +102,8 @@ static NSString *CODER_REQUEST_TIMEOUT = @"reqtimeout";
                             CODER_USER_NAME : _userName,
                             CODER_USER_PASSWORD : _userPassword,
                             CODER_REFRESH_TIMEOUT : @(_refreshTimeout),
-                            CODER_REQUEST_TIMEOUT : @(_refreshTimeout)
+                            CODER_REQUEST_TIMEOUT : @(_refreshTimeout),
+                            CODER_SHOW_FREESPACE : @(_showFreeSpace)
                             };
     
     return pList;
@@ -118,6 +123,7 @@ static NSString *CODER_REQUEST_TIMEOUT = @"reqtimeout";
         _userPassword = plist[CODER_USER_PASSWORD];
         _refreshTimeout = [(NSNumber*)plist[CODER_REFRESH_TIMEOUT] intValue];
         _requestTimeout = [(NSNumber*)plist[CODER_REQUEST_TIMEOUT] intValue];
+        _showFreeSpace = [plist[CODER_SHOW_FREESPACE] boolValue];
     }
     
     return self;

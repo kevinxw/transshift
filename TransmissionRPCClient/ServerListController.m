@@ -12,6 +12,7 @@
 #import "TorrentListController.h"
 #import "StatusListController.h"
 #import "RPCServerConfigDB.h"
+#import "ServerListFooterView.h"
 #import "GlobalConsts.h"
 
 @interface ServerListController () <ServerListItemCellDelegate>
@@ -30,6 +31,8 @@
     StatusListController *_statusListController;
     
     NSString        *_version;
+    
+    ServerListFooterView *_footerView;
 }
 
 - (void)viewDidLoad
@@ -55,7 +58,7 @@
     self.navigationItem.rightBarButtonItem = _buttonAdd;
     
     // show version
-    _version = [NSString stringWithFormat:@"version %@(%@)",
+    _version = [NSString stringWithFormat: NSLocalizedString(@"version %@(%@)", "ServerListController version"),
                          [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"],
                          [NSBundle mainBundle].infoDictionary[@"CFBundleVersion"]];
     
@@ -72,20 +75,23 @@
     // fixing left button title for popOver navigation bar
     if( self.splitViewController )
     {
-        UINavigationController *nc = self.splitViewController.viewControllers[1];
-        TorrentListController *tlc = nc.viewControllers[0];
-        tlc.torrents = nil;
-
+        UINavigationController *nav = self.splitViewController.viewControllers[1];
+        TorrentListController *tlc = nav.viewControllers[0];
+        
+        tlc.items = nil;
+        tlc.infoMessage = NSLocalizedString( @"There is no selected server.", @"" );
+        tlc.errorMessage = nil;
+        tlc.footerInfoMessage = nil;
         tlc.popoverButtonTitle = SERVERLIST_CONTROLLER_TITLE;
         
-        [nc popToRootViewControllerAnimated:YES];
+        [nav popToRootViewControllerAnimated:YES];
     }
     
     // - BACKGOUND FETCHING remove keys for background fetching
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults removeObjectForKey:USERDEFAULTS_BGFETCH_KEY_RPCCONFG];
     [defaults removeObjectForKey:USERDEFAULTS_BGFETCH_KEY_DOWNTORRENTIDS];
-    // -
+    // ---
 }
 
 - (RPCServerConfigController *)rpcConfigController
@@ -95,7 +101,7 @@
         _rpcConfigController = instantiateController(CONTROLLER_ID_RPCSERVERCONFIG);
     
         // add buttons
-        _rpcConfigController.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Cancel"
+        _rpcConfigController.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString( @"Cancel", @"")
                                                                                                  style:UIBarButtonItemStyleDone
                                                                                                 target:self
                                                                                                 action:@selector(hideRPCConfigController)];
@@ -114,11 +120,12 @@
 - (void)showAddNewRPCConfigController
 {  
     // show view controller with two buttons "Cancel and Save"
-    self.rpcConfigController.title = @"Add new server";
-    self.rpcConfigController.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Add"
-                                                                                              style:UIBarButtonItemStyleDone
-                                                                                             target:self
-                                                                                              action:@selector(addNewRPCConfig)];
+    self.rpcConfigController.title =  NSLocalizedString(@"Add new server", @"");
+    self.rpcConfigController.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+                                                                  initWithTitle: NSLocalizedString(@"Add", @"")
+                                                                  style:UIBarButtonItemStyleDone
+                                                                  target:self
+                                                                  action:@selector(addNewRPCConfig)];
     
     [self.navigationController pushViewController:self.rpcConfigController animated:YES];
 }
@@ -171,17 +178,54 @@
 {
      RPCServerConfig *configToEdit = [RPCServerConfigDB sharedDB].db[indexPath.row];
     
-    self.rpcConfigController.title = @"Edit server";
-    self.rpcConfigController.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Save"
-                                                                                              style:UIBarButtonItemStyleDone
-                                                                                             target:self
-                                                                                             action:@selector(commitEditingRPCConfig)];
+    self.rpcConfigController.title =  NSLocalizedString(@"Edit server", @"RPCConfigController title");
+    self.rpcConfigController.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+                                                                  initWithTitle: NSLocalizedString(@"Save", @"")
+                                                                  style:UIBarButtonItemStyleDone
+                                                                  target:self
+                                                                  action:@selector(commitEditingRPCConfig)];
     
     self.rpcConfigController.config = configToEdit;
     
     [self toggleEditMode];
     
     [self.navigationController pushViewController:self.rpcConfigController animated:YES];
+}
+
+- (void)showVersion:(NSString *)version
+{
+   if( version )
+   {
+       if( !_footerView )
+           _footerView = [ServerListFooterView view];
+       
+       _footerView.labelVersion.text = version;
+       self.tableView.tableFooterView = _footerView;
+   }
+   else
+   {
+       self.tableView.tableFooterView = nil;
+   }
+}
+
+- (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation
+{
+    [super didRotateFromInterfaceOrientation:fromInterfaceOrientation];
+    
+    if( self.tableView.tableFooterView )
+    {
+        [_footerView setBoundsFromTableView:self.tableView];
+        self.tableView.tableFooterView = _footerView;
+        
+        if( self.splitViewController )
+        {
+            UINavigationController *nav = self.splitViewController.viewControllers[1];
+            TorrentListController *tlc = nav.viewControllers[0];
+            
+            tlc.items = nil;
+            tlc.infoMessage = NSLocalizedString( @"There is no selected server.", @"" );
+        }
+    }
 }
 
 #pragma mark - TableView delegate methods
@@ -222,15 +266,18 @@
     NSUInteger itemsCount = [RPCServerConfigDB sharedDB].db.count;
 
     self.navigationItem.leftBarButtonItem.enabled = itemsCount > 0;
-    self.infoMessage = itemsCount > 0 ? nil : @"There are no servers available.\nAdd server to the list.";
-    self.footerInfoMessage = itemsCount > 0 ? _version : nil;
+    self.infoMessage = itemsCount > 0 ? nil :  NSLocalizedString(@"There are no servers available add server to the list", nil);
+    
+    // show version if there is some server items
+    //self.footerInfoMessage = itemsCount > 0 ?  [_version : nil;
+    [self showVersion:(itemsCount > 0 ? _version : nil )];
     
     return itemsCount > 0 ? 1 : 0;
  }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section
 {
-    return @"List of configured servers";
+    return NSLocalizedString(@"List of configured servers", @"section title");
 }
 
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath

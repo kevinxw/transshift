@@ -18,22 +18,22 @@
     UILabel*    _headerLabel;
 }
 
-// set nil or @"" string to hide error message from top
+/// set nil string to hide error message from top
 - (void)setErrorMessage:(NSString *)errorMessage
 {
     _errorMessage = errorMessage;
     
-    // lazy inst
+    // lazy instantiation
     if( !_errorLabel )
     {
         _errorLabel = [[UILabel  alloc] initWithFrame:CGRectZero];
-        _errorLabel.backgroundColor = [UIColor redColor];
+        _errorLabel.backgroundColor = [UIColor errorColor];
         _errorLabel.textColor = [UIColor whiteColor];
         _errorLabel.numberOfLines = 0;
         _errorLabel.font = [UIFont systemFontOfSize:TABLEHEADER_ERRORLABEL_FONTSIZE];
         _errorLabel.textAlignment = NSTextAlignmentCenter;
     }
-    
+
     if( errorMessage )
     {
         _errorLabel.text = errorMessage;
@@ -45,8 +45,9 @@
         _errorLabel.bounds = r;
         
         self.tableView.tableHeaderView = _errorLabel;
+        [self.tableView scrollRectToVisible:CGRectMake(0, 0, 1, 1) animated:YES];
     }
-    else
+    else if( self.tableView.tableHeaderView == _errorLabel )
     {
         self.tableView.tableHeaderView = nil;
     }
@@ -95,6 +96,9 @@
     
     if( footerInfoMessage )
     {
+        NSRange newLineRange = [footerInfoMessage rangeOfString:@"\n"];
+        _footerLabel.numberOfLines = newLineRange.length == 0 ? 1 : 0;
+
         _footerLabel.text = footerInfoMessage;
         [_footerLabel sizeToFit];
         CGRect r = self.tableView.bounds;
@@ -121,6 +125,8 @@
     
     if( headerInfoMessage )
     {
+        NSRange newLineRange = [headerInfoMessage rangeOfString:@"\n"];
+        _headerLabel.numberOfLines = newLineRange.length == 0 ? 1 : 0;
         _headerLabel.text = headerInfoMessage;
         [_headerLabel sizeToFit];
         

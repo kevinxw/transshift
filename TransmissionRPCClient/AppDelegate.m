@@ -14,8 +14,11 @@
 #import "ChooseServerToAddTorrentController.h"
 #import "TorrentListController.h"
 #import "InfoMessage.h"
-
 #import "FSDirectory.h"
+#import "Bencoding.h"
+//#import "TRFileInfo.h"
+#import "MagnetURL.h"
+#import "TorrentFile.h"
 
 @interface AppDelegate() <RPCConnectorDelegate>
 
@@ -27,11 +30,17 @@
 
 {
     ServerListController *_serverList;
-    NSData *_torrentFileDataToAdd;
+    
+    //NSData *_torrentFileDataToAdd;
+    //NSString *_magnetURLString;
+    
+    TorrentFile          *_torrentFile;
+    MagnetURL            *_magnetURL;
+    
     UINavigationController *_chooseNav;
     RPCServerConfig *_selectedConfig;
     
-    NSString *_magnetURLString;
+    NSArray *_unwantedFilesIdx;
     
     // flag showing - that we use background fetching
     BOOL _isBackgroundFetching;
@@ -50,18 +59,21 @@
     _serverList = instantiateController( CONTROLLER_ID_SERVERLIST );
        
     UINavigationController *leftNav = [[UINavigationController alloc] initWithRootViewController:_serverList];
+    preferBigTitleForNavController(leftNav);
     
     UIViewController *rootController = leftNav;
     
     // create split view controller on iPad
-    if( [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad )
+    // TODO: also need to create SplitView on iPhone 6 Plus
+    if( [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad || isIPhonePlus() )
     {
         TorrentListController *trc = instantiateController( CONTROLLER_ID_TORRENTLIST );
-        trc.infoMessage = @"There is no selected server. Select server from list of servers.";
-        trc.title = @"Transmission remote client";
-        trc.popoverButtonTitle = SERVERLIST_CONTROLLER_TITLE;
+        trc.infoMessage = NSLocalizedString(@"There is no selected server. Select server from list of servers.", @"");
+        trc.title = NSLocalizedString(@"Transmission remote client", @"TorrentList start title");
+        trc.popoverButtonTitle = NSLocalizedString(@"Servers", @"ServerListController title");//SERVERLIST_CONTROLLER_TITLE;
         
         UINavigationController *rightNav = [[UINavigationController alloc] initWithRootViewController:trc];
+        preferBigTitleForNavController(rightNav);
         
         UISplitViewController *splitView = [[UISplitViewController alloc] init];
         splitView.viewControllers = @[ leftNav, rightNav ];
@@ -70,8 +82,8 @@
     }
     
     self.window.rootViewController = rootController;
-    // set background fetch interval
     
+    // set background fetch interval    
     [application setMinimumBackgroundFetchInterval:UIApplicationBackgroundFetchIntervalMinimum];
     
     // show main window
@@ -87,39 +99,50 @@
     // handle url - it is a .torrent file or magnet url
     if( url )
     {
+        // FIX: when user wants to load file serveral times in a row
+        // or when user taps on torrent file in safari serveral times in a row
+        if( _chooseNav )
+            [_chooseNav dismissViewControllerAnimated:NO completion:nil];
         
-         //NSLog(@"URL Scheme: %@, desc:%@", url.scheme, url );
-        _torrentFileDataToAdd = nil;
-        _magnetURLString = nil;
+        _torrentFile = nil;
+        _magnetURL = nil;
         
-        if( ![url.scheme isEqualToString:@"magnet"] )
+        if( [MagnetURL isMagnetURL:url] )
         {
-            _torrentFileDataToAdd = [NSData dataWithContentsOfURL:url];
+            _magnetURL = [MagnetURL magnetWithURL:url];
         }
         else
         {
-            _magnetURLString = url.description;
+            _torrentFile = [TorrentFile torrentFileWithURL:url];
         }
         
-        if( [RPCServerConfigDB sharedDB].db.count > 0 &&
-           ( _torrentFileDataToAdd || _magnetURLString )  )
+        if( [RPCServerConfigDB sharedDB].db.count > 0 && ( _torrentFile || _magnetURL ) )
         {
             // presenting view controller to choose from several remote servers
             ChooseServerToAddTorrentController *chooseServerController = instantiateController( CONTROLLER_ID_CHOOSESERVER );
             
-            NSByteCountFormatter *byteFormatter = [[NSByteCountFormatter alloc] init];
-            byteFormatter.allowsNonnumericFormatting = NO;
+
+            chooseServerController.isMagnet = ( _magnetURL != nil );
             
-            chooseServerController.headerInfoMessage = _magnetURLString ?
-                [NSString stringWithFormat: @"Add torrent with magnet link:\n%@", _magnetURLString] :
-                [NSString stringWithFormat: @"Add torrent with file size: %@", [byteFormatter stringFromByteCount:_torrentFileDataToAdd.length]];
+            if( _magnetURL )
+            {
+                [chooseServerController setTorrentTitle:_magnetURL.name andTorrentSize:_magnetURL.torrentSizeString];
+                chooseServerController.announceList = _magnetURL.trackerList;
+            }
+            else
+            {
+                [chooseServerController setTorrentTitle:_torrentFile.name andTorrentSize:_torrentFile.torrentSizeString];
+                
+                chooseServerController.files = _torrentFile.fileList;
+                chooseServerController.announceList = _torrentFile.trackerList;
+            }
             
-            UIBarButtonItem *leftButton = [[UIBarButtonItem alloc] initWithTitle:@"Cancel"
+            UIBarButtonItem *leftButton = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Cancel", @"")
                                                                            style:UIBarButtonItemStylePlain
                                                                           target:self
                                                                           action:@selector(dismissChooseServerController)];
             
-            UIBarButtonItem *rightButton = [[UIBarButtonItem alloc] initWithTitle:@"OK"
+            UIBarButtonItem *rightButton = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"OK", @"")
                                                                             style:UIBarButtonItemStylePlain
                                                                            target:self
                                                                            action:@selector(addTorrentToSelectedServer)];
@@ -133,12 +156,13 @@
             
             [self.window.rootViewController presentViewController:_chooseNav animated:YES completion:nil];
         }
-        else    // show message
+        // none of preconfigured servers avalable, show messae
+        else
         {
-            UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@""
-                                                            message:@"There is no servers avalable"
+            UIAlertView *alert = [[UIAlertView alloc] initWithTitle:NSLocalizedString(@"There are no servers avalable", nil)
+                                                            message:NSLocalizedString(@"Add server to the list and try again", nil)
                                                            delegate:nil
-                                                  cancelButtonTitle:@"OK"
+                                                  cancelButtonTitle:NSLocalizedString(@"OK", @"")
                                                   otherButtonTitles:nil, nil];
             [alert show];
         }
@@ -147,7 +171,6 @@
     
     return YES;
 }
-
 
 - (void)applicationWillEnterForeground:(UIApplication *)application
 {
@@ -158,41 +181,45 @@
 {
     RPCConnector *connector = [[RPCConnector alloc] initWithConfig:config andDelegate:self];
     
-    if( _torrentFileDataToAdd )
-        [connector addTorrentWithData:_torrentFileDataToAdd priority:priority startImmidiately:startNow];
-    else if( _magnetURLString )
-        [connector addTorrentWithMagnet:_magnetURLString priority:priority startImmidiately:startNow];
+    if( _torrentFile )
+    {
+        if( _unwantedFilesIdx )
+            [connector addTorrentWithData:_torrentFile.torrentData
+                                 priority:priority
+                         startImmidiately:startNow
+                          indexesUnwanted:_unwantedFilesIdx];
+        else
+            [connector addTorrentWithData:_torrentFile.torrentData
+                                 priority:priority
+                         startImmidiately:startNow];
+    }
+    else if( _magnetURL )
+    {
+        [connector addTorrentWithMagnet:_magnetURL.urlString
+                               priority:priority
+                       startImmidiately:startNow];
+    }
 }
 
 - (void)gotTorrentAdded
 {
     InfoMessage *msg = [InfoMessage infoMessageWithSize:CGSizeMake(300, 50)];
-    [msg showInfo:@"New torrent has been added" fromView:self.window.rootViewController.view];
+    [msg showInfo:NSLocalizedString(@"New torrent has been added", @"AppDelegate float message")
+         fromView:self.window.rootViewController.view];
 }
 
-// error handler
-- (void)connector:(RPCConnector *)cn complitedRequestName:(NSString *)requestName withError:(NSString *)errorMessage
-{
-    if( !_isBackgroundFetching )
-    {
-        
-        UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Can't add torrent"
-                                                        message:[NSString stringWithFormat:@"%@", errorMessage]
-                                                       delegate:nil
-                                              cancelButtonTitle:@"OK"
-                                              otherButtonTitles:nil, nil];
-        [alert show];
-    }
-    else
-    {
-        NSLog(@"BackgroundFetch: connector request error, %@", errorMessage);
-        _bgComplitionHandler(UIBackgroundFetchResultFailed);
-    }
-}
 
 - (void)addTorrentToSelectedServer
 {
     ChooseServerToAddTorrentController *csc = (ChooseServerToAddTorrentController*)_chooseNav.viewControllers[0];
+    
+    _unwantedFilesIdx = nil;
+    
+    if( csc.files )
+    {
+        NSArray *tmp = csc.files.rootItem.rpcFileIndexesUnwanted;
+        _unwantedFilesIdx = ( tmp && tmp.count > 0 ) ? tmp : nil;
+    }
     
     [self addTorrentToServerWithRPCConfig:csc.rpcConfig priority:csc.bandwidthPriority startNow:csc.startImmidiately];
     
@@ -202,6 +229,7 @@
 - (void)dismissChooseServerController
 {
     [_chooseNav dismissViewControllerAnimated:YES completion:nil];
+    _chooseNav = nil;
 }
 
 - (void)applicationWillResignActive:(UIApplication *)application
@@ -214,11 +242,32 @@
     [defaults synchronize];
 }
 
+
+// error handler
+- (void)connector:(RPCConnector *)cn complitedRequestName:(NSString *)requestName withError:(NSString *)errorMessage
+{
+    if( !_isBackgroundFetching )
+    {
+        
+        UIAlertView *alert = [[UIAlertView alloc] initWithTitle:NSLocalizedString(@"Can't add torrent", @"Alert view title")
+                                                        message:[NSString stringWithFormat:@"%@", errorMessage]
+                                                       delegate:nil
+                                              cancelButtonTitle:NSLocalizedString(@"OK", @"")
+                                              otherButtonTitles:nil, nil];
+        [alert show];
+    }
+    else
+    {
+        //NSLog(@"BackgroundFetch: connector request error, %@", errorMessage);
+        _bgComplitionHandler( UIBackgroundFetchResultFailed );
+    }
+}
+
 - (void)gotAllTorrents:(TRInfos *)trInfos
 {
     if( _isBackgroundFetching )
     {
-        NSLog(@"BackgroundFetch: got all torrents");
+        //NSLog(@"BackgroundFetch: got all torrents");
         
         // fetch is complite
         NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -228,18 +277,18 @@
         // in NSUserDefaults
         NSArray *curDownIds = trInfos.downloadingTorrents;
         
-        NSLog(@"curDownIds from NsUserDefaults: %i", (int)curDownIds.count );
+        //NSLog(@"curDownIds from NsUserDefaults: %i", (int)curDownIds.count );
         
         if( curDownIds && curDownIds.count > 0 )
         {
-            NSLog(@"Updating NsUserDefaults with curDownIds ...");
+            //NSLog(@"Updating NsUserDefaults with curDownIds ...");
             
             NSMutableArray *downIds = [NSMutableArray array];
             
             for ( TRInfo* t in curDownIds )
                 [downIds addObject:@(t.trId)];
             
-            NSLog( @"Setting updated array with Ids count :%i", (int)downIds.count );
+            //NSLog( @"Setting updated array with Ids count :%i", (int)downIds.count );
             [defaults setObject:downIds forKey:USERDEFAULTS_BGFETCH_KEY_DOWNTORRENTIDS];
             [defaults synchronize];
         }
@@ -252,13 +301,13 @@
         
         if( !downIds )
         {
-            NSLog(@"No previous downloading torrent ids found. Exit");
+            //NSLog(@"No previous downloading torrent ids found. Exit");
             // there is downIds - try to create new and return
             _bgComplitionHandler(UIBackgroundFetchResultNoData);
         }
         else
         {
-            NSLog(@"There are downloading torrents, %i ", (int)downIds.count);
+            //NSLog(@"There are downloading torrents, %i ", (int)downIds.count);
             // info string
             NSMutableString *infoStr = [NSMutableString string];
             
@@ -273,14 +322,14 @@
                     if( torrentId == info.trId )
                     {
                         // we have found torrent that is finished
-                        [infoStr appendString: [NSString stringWithFormat:@"Torrent: %@, has finished downloading\n", info.name] ];
+                        [infoStr appendString: [NSString stringWithFormat:NSLocalizedString( @"Torrent: %@, has finished downloading\n", @""), info.name] ];
                     }
                 }
             } // end for searching
             
             if( infoStr.length > 0 )
             {
-                NSLog(@"Found finished torrents: %@", infoStr);
+                //NSLog(@"Found finished torrents: %@", infoStr);
                 // we should show
                 // show local notification
                 UILocalNotification *notification = [[UILocalNotification alloc] init];
@@ -298,7 +347,7 @@
             }
             else
             {
-                NSLog(@"No finished torrents found. Exit.");
+                //NSLog(@"No finished torrents found. Exit.");
                 _bgComplitionHandler(UIBackgroundFetchResultNoData);
             }
         }
@@ -307,21 +356,13 @@
 
 - (void)application:(UIApplication *)application performFetchWithCompletionHandler:(void (^)(UIBackgroundFetchResult))completionHandler
 {
-    
-//    // just for test
-//    UILocalNotification *notification = [[UILocalNotification alloc] init];
-//    notification.soundName = UILocalNotificationDefaultSoundName;
-//    notification.alertBody = @"Background fetch!";
-//    [application presentLocalNotificationNow:notification];
-//    
-    
-    // peform fetch in background
+     // peform fetch in background
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSDictionary *plist = [defaults dictionaryForKey: USERDEFAULTS_BGFETCH_KEY_RPCCONFG];
     
     if( plist )
     {
-        NSLog(@"BackgroundFetch: - GETTING DATA .... ");
+        //NSLog(@"BackgroundFetch: - GETTING DATA .... ");
         
         RPCServerConfig *config = [[RPCServerConfig alloc] initFromPList:plist];
         // try to get update on this torrents
@@ -337,7 +378,7 @@
     }
     else
     {
-        NSLog(@"BackgroundFetch: - NO DATA FETCHED");
+        //NSLog(@"BackgroundFetch: - NO DATA FETCHED");
         completionHandler( UIBackgroundFetchResultNoData );
     }
 }

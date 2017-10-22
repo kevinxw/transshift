@@ -7,8 +7,9 @@
 //
 
 #import "SessionConfigController.h"
+#import "ScheduleAltLimitsController.h"
 
-@interface SessionConfigController ()
+@interface SessionConfigController () <UIPopoverControllerDelegate>
 
 @property (weak, nonatomic) IBOutlet UISwitch *switchDownloadRateEnabled;
 @property (weak, nonatomic) IBOutlet UITextField *textDownloadRateNumber;
@@ -44,8 +45,14 @@
 @property (weak, nonatomic) IBOutlet UISwitch *switchPortForwardingEnabled;
 @property (weak, nonatomic) IBOutlet UITextField *textPortNumber;
 @property (weak, nonatomic) IBOutlet UILabel *labelPort;
+@property (weak, nonatomic) IBOutlet UIActivityIndicatorView *indicatorPortCheck;
 
 @property(nonatomic) BOOL enableControls;
+@property (weak, nonatomic) IBOutlet UITextField *textDownloadDir;
+@property (weak, nonatomic) IBOutlet UISwitch *switchScheduleAltLimits;
+
+//@property (weak, nonatomic) IBOutlet UIButton *buttonShowScheduler;
+@property (weak, nonatomic) IBOutlet UISegmentedControl *segmentShowScheduler;
 
 @end
 
@@ -53,17 +60,37 @@
 
 {
     NSArray *_controls;
+    UIPopoverController *_popOver;
+    ScheduleAltLimitsController *_scheduleController;
 }
 
 - (void)viewDidLoad
 {
     [super viewDidLoad];
-    
-    //NSLog(@"SessionConfigController: viewDidLoad");
-    
+   
     self.enableControls = NO;
     
-    self.title = @"Settings";
+    self.title =  NSLocalizedString(@"Settings", @"SessionConfigController title");
+    
+    [_segmentShowScheduler removeSegmentAtIndex:1 animated:NO];
+}
+
+- (void)viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+    [self saveAltLimitsSchedulerSettings];
+}
+
+- (void)saveAltLimitsSchedulerSettings
+{
+    _segmentShowScheduler.selectedSegmentIndex = -1;
+    
+    if( _scheduleController )
+    {
+        _sessionInfo.altLimitDay = _scheduleController.daysMask;
+        _sessionInfo.altLimitTimeBegin = _scheduleController.timeBegin;
+        _sessionInfo.altLimitTimeEnd = _scheduleController.timeEnd;
+    }
 }
 
 - (void)setSessionInfo:(TRSessionInfo *)sessionInfo
@@ -77,13 +104,23 @@
 {
     _sessionInfo.downLimitEnabled = _switchDownloadRateEnabled.on;
     _sessionInfo.upLimitEnabled = _switchUploadRateEnabled.on;
+
+    NSString *downloadDir = [_textDownloadDir.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    
+    if( downloadDir.length < 1 )
+    {
+        self.errorMessage = NSLocalizedString(@"You shoud set download directory", @"");
+        return NO;
+    }
+    
+    _sessionInfo.downloadDir = downloadDir;
     
     if( _sessionInfo.downLimitEnabled )
     {
         _sessionInfo.downLimitRate = [_textDownloadRateNumber.text intValue];
         if( _sessionInfo.downLimitRate <= 0 || _sessionInfo.downLimitRate >= 1000000 )
         {
-            self.errorMessage = @"Wrong download rate limit";
+            self.errorMessage = NSLocalizedString(@"Wrong download rate limit", @"");
             return NO;
         }
     }
@@ -93,7 +130,7 @@
         _sessionInfo.upLimitRate = [_textUploadRateNumber.text intValue];
         if (_sessionInfo.upLimitRate <= 0 || _sessionInfo.upLimitRate >= 1000000 )
         {
-            self.errorMessage = @"Wrong upload rate limit";
+            self.errorMessage = NSLocalizedString(@"Wrong upload rate limit", @"");
             return NO;
         }
     }
@@ -104,14 +141,14 @@
         _sessionInfo.altDownloadRateLimit = [_textAltDownloadRateNumber.text intValue];
         if( _sessionInfo.altDownloadRateLimit <=0 || _sessionInfo.altDownloadRateLimit >= 1000000 )
         {
-            self.errorMessage = @"Wrong alternative download rate limit";
+            self.errorMessage = NSLocalizedString(@"Wrong alternative download rate limit", @"");
             return NO;
         }
         
         _sessionInfo.altUploadRateLimit = [_textAltUploadRateNumber.text intValue];
         if( _sessionInfo.altUploadRateLimit <=0 || _sessionInfo.altUploadRateLimit >= 1000000 )
         {
-            self.errorMessage = @"Wrong alternative upload rate limit";
+            self.errorMessage = NSLocalizedString(@"Wrong alternative upload rate limit", @"");
             return NO;
         }
     }
@@ -125,7 +162,7 @@
         _sessionInfo.seedRatioLimit = [_textSeedRatioLimitNumber.text floatValue];
         if( _sessionInfo.seedRatioLimit <=0 )
         {
-            self.errorMessage = @"Wrong seed ratio limit factor";
+            self.errorMessage = NSLocalizedString(@"Wrong seed ratio limit factor", @"");
             return NO;
         }
     }
@@ -136,7 +173,7 @@
         _sessionInfo.seedIdleLimit = [_textIdleSeedNumber.text intValue];
         if( _sessionInfo.seedIdleLimit <= 0 )
         {
-            self.errorMessage = @"Wrong seed idle timeout number";
+            self.errorMessage = NSLocalizedString(@"Wrong seed idle timeout number", @"");
             return NO;
         }
     }
@@ -145,14 +182,14 @@
     
     if( _sessionInfo.globalPeerLimit <=0 )
     {
-        self.errorMessage = @"Wrong total peers count";
+        self.errorMessage = NSLocalizedString(@"Wrong total peers count", @"");
         return NO;
     }
     
     _sessionInfo.torrentPeerLimit = [_textPeersPerTorrentNumber.text intValue];
     if( _sessionInfo.torrentPeerLimit <= 0 || _sessionInfo.torrentPeerLimit > _sessionInfo.globalPeerLimit )
     {
-        self.errorMessage = @"Wrong peers per torrent count";
+        self.errorMessage = NSLocalizedString(@"Wrong peers per torrent count", @"");
         return NO;
     }
     
@@ -171,10 +208,15 @@
         _sessionInfo.port = [_textPortNumber.text intValue];
         if( _sessionInfo.port <= 0 || _sessionInfo.port > 65535 )
         {
-            self.errorMessage = @"Wrong port number";
+            self.errorMessage = NSLocalizedString(@"Wrong port number", @"");
             return  NO;
         }
     }
+    
+    _sessionInfo.altLimitTimeEnabled = _switchScheduleAltLimits.on;
+
+    if( _switchScheduleAltLimits.on )
+        [self saveAltLimitsSchedulerSettings];
     
     self.errorMessage = nil;
     return YES;
@@ -223,19 +265,33 @@
         _switchUTPEnabled.on = _sessionInfo.UTPEnabled;
         
         _switchRandomPortEnabled.on = _sessionInfo.portRandomAtStartEnabled;
-        _textPortNumber.enabled = _sessionInfo.portRandomAtStartEnabled;
+        _textPortNumber.enabled = !_sessionInfo.portRandomAtStartEnabled;
         _textPortNumber.text = [NSString stringWithFormat:@"%i", _sessionInfo.port];
         _switchPortForwardingEnabled.on = _sessionInfo.portForfardingEnabled;
         
+        _labelPort.text = NSLocalizedString(@"testing ...", @"");
+        _indicatorPortCheck.hidden = NO;
+        [_indicatorPortCheck startAnimating];
+        
+        _textDownloadDir.enabled = YES;
+        _textDownloadDir.text = _sessionInfo.downloadDir;
+        
+        _switchScheduleAltLimits.enabled = YES;
+        _switchScheduleAltLimits.on = _sessionInfo.altLimitTimeEnabled;
+        //_buttonShowScheduler.enabled = _switchScheduleAltLimits.on;
+        _segmentShowScheduler.enabled = _switchScheduleAltLimits.on;
+        _segmentShowScheduler.selectedSegmentIndex = -1;
+        
         self.headerInfoMessage = [NSString stringWithFormat:@"Transmission %@", _sessionInfo.transmissionVersion];
-        self.footerInfoMessage = [NSString stringWithFormat:@"RPC Version: %@", _sessionInfo.rpcVersion ];
+        self.footerInfoMessage = [NSString stringWithFormat:NSLocalizedString(@"RPC Version: %@", @""), _sessionInfo.rpcVersion ];
     }
 }
 
 - (void)setPortIsOpen:(BOOL)portIsOpen
 {
+    [_indicatorPortCheck stopAnimating];
     _labelPort.textColor = portIsOpen ? [UIColor greenColor] : [UIColor redColor];
-    _labelPort.text = portIsOpen ? @"OPEN" : @"CLOSED";
+    _labelPort.text = portIsOpen ? NSLocalizedString(@"OPEN", @"Portinfo") : NSLocalizedString(@"CLOSED", @"Portinfo");
 }
 
 - (void)setEnableControls:(BOOL)enableControls
@@ -249,7 +305,8 @@
                            _switchPEXEnabled, _switchPortForwardingEnabled, _switchRandomPortEnabled, _switchSeedRatioLimitEnabled,
                            _switchStartDownloadImmidiately, _switchUploadRateEnabled, _switchUTPEnabled, _textAltDownloadRateNumber,
                            _textAltUploadRateNumber, _textDownloadRateNumber, _textIdleSeedNumber, _textPeersPerTorrentNumber, _textPortNumber,
-                           _textSeedRatioLimitNumber, _textSeedRatioLimitNumber, _textTotalPeersCountNumber, _textUploadRateNumber, _segmentEncryption
+                           _textSeedRatioLimitNumber, _textSeedRatioLimitNumber, _textTotalPeersCountNumber, _textUploadRateNumber, _segmentEncryption,
+                           _textDownloadDir, _segmentShowScheduler
                           ];
     }
     
@@ -288,6 +345,45 @@
 
 - (IBAction)toggleRandomPort:(UISwitch*)sender
 {
-    _textPortNumber.enabled = sender.on;
+    _textPortNumber.enabled = !sender.on;
 }
+
+- (IBAction)btnShowScheduler:(UISegmentedControl *)sender
+{
+    if( _switchScheduleAltLimits.on )
+    {
+        _scheduleController = instantiateController( CONTROLLER_ID_SCHEDULETIMEDATE );
+        _scheduleController.title = NSLocalizedString(@"Schedule time", @"");
+        
+        //NSLog(@"Setting values ...");
+        _scheduleController.daysMask = _sessionInfo.altLimitDay;
+        _scheduleController.timeBegin = _sessionInfo.altLimitTimeBegin;
+        _scheduleController.timeEnd = _sessionInfo.altLimitTimeEnd;
+        
+        if( self.splitViewController )
+        {
+            UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:_scheduleController];
+            
+            _popOver = [[UIPopoverController alloc] initWithContentViewController:nav];
+            _popOver.delegate = self;
+            
+            [_popOver presentPopoverFromRect:sender.bounds inView:sender permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES];
+        }
+        else
+        {
+            [self.navigationController pushViewController:_scheduleController animated:YES];
+        }
+    }
+}
+
+- (IBAction)scheduleOnOff:(UISwitch *)sender
+{
+    _segmentShowScheduler.enabled = sender.on;
+}
+
+- (void)popoverControllerDidDismissPopover:(UIPopoverController *)popoverController
+{
+    [self saveAltLimitsSchedulerSettings];
+}
+
 @end
